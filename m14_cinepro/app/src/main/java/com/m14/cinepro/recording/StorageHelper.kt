@@ -338,30 +338,30 @@ class StorageHelper(private val context: Context) {
         mime: String,
         legacyRoot: String
     ): OutputHandle? {
-        return if (useMediaStore) {
+        if (useMediaStore) {
             val resolver = context.contentResolver
-            val uri = insertPending(collection, name, mime, relativePath) ?: return null
-            val raw = try {
-                resolver.openOutputStream(uri)
-            } catch (e: Exception) {
-                Log.e(TAG, "openOutputStream failed ($name)", e)
-                null
-            }
-            if (raw == null) {
+            val uri = insertPending(collection, name, mime, relativePath)
+            if (uri != null) {
+                val raw = try {
+                    resolver.openOutputStream(uri)
+                } catch (e: Exception) {
+                    Log.e(TAG, "openOutputStream failed ($name)", e)
+                    null
+                }
+                if (raw != null) {
+                    return buildHandle(uri, null, raw, name)
+                }
                 try { resolver.delete(uri, null, null) } catch (e: Exception) { Log.w(TAG, "row delete failed", e) }
-                return null
             }
-            buildHandle(uri, null, raw, name)
-        } else {
-            val file = legacyFile(legacyRoot, name) ?: return null
-            val raw = try {
-                FileOutputStream(file)
-            } catch (e: Exception) {
-                Log.e(TAG, "file create failed ($name)", e)
-                null
-            } ?: return null
-            buildHandle(null, file, raw, name)
         }
+        val file = legacyFile(legacyRoot, name) ?: return null
+        val raw = try {
+            FileOutputStream(file)
+        } catch (e: Exception) {
+            Log.e(TAG, "file create failed ($name)", e)
+            null
+        } ?: return null
+        return buildHandle(null, file, raw, name)
     }
 
     @Suppress("DEPRECATION")

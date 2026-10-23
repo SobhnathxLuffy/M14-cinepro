@@ -1,0 +1,222 @@
+--- M14 CINEPRO RUNTIME LOGS & 720P 60FPS HIGH-SPEED CRASH TRACE ---
+--------- beginning of main
+10-23 22:22:46.179 23592 23592 I M14Hud  : Engine initialized; waiting for preview texture + session
+10-23 22:22:46.410 23592 23634 I M14GL   : M14GL onSurfaceCreated: Mali-G68
+10-23 22:22:46.683 23592 23634 I M14GL   : M14GL luminance LUT baked (33^3)
+10-23 22:22:46.687 23592 23634 W M14Cam  : thread priority set failed
+10-23 22:22:46.687 23592 23634 W M14Cam  : java.lang.IllegalArgumentException: Given thread -1 does not exist
+10-23 22:22:46.687 23592 23634 W M14Cam  : 	at android.os.Process.setThreadPriority(Native Method)
+10-23 22:22:46.687 23592 23634 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.ensureHandler(CameraEngine.kt:622)
+10-23 22:22:46.687 23592 23634 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.open(CameraEngine.kt:158)
+10-23 22:22:46.687 23592 23634 W M14Cam  : 	at com.m14.cinepro.MainActivity.maybeStartCamera(MainActivity.kt:250)
+10-23 22:22:46.687 23592 23634 W M14Cam  : 	at com.m14.cinepro.MainActivity.access$maybeStartCamera(MainActivity.kt:42)
+10-23 22:22:46.687 23592 23634 W M14Cam  : 	at com.m14.cinepro.MainActivity$initEngine$3.invoke(MainActivity.kt:218)
+10-23 22:22:46.687 23592 23634 W M14Cam  : 	at com.m14.cinepro.MainActivity$initEngine$3.invoke(MainActivity.kt:219)
+10-23 22:22:46.687 23592 23634 W M14Cam  : 	at com.m14.cinepro.gl.ViewfinderRenderer.onSurfaceCreated(ViewfinderRenderer.kt:201)
+10-23 22:22:46.687 23592 23634 W M14Cam  : 	at android.opengl.GLSurfaceView$GLThread.guardedRun(GLSurfaceView.java:1545)
+10-23 22:22:46.687 23592 23634 W M14Cam  : 	at android.opengl.GLSurfaceView$GLThread.run(GLSurfaceView.java:1276)
+10-23 22:22:46.694 23592 23634 I M14GL   : M14GL histogram ready: analysis 146x66, bins=64
+10-23 22:22:46.694 23592 23634 I M14GL   : M14GL onSurfaceChanged: 2343x1080
+10-23 22:22:47.059 23592 23592 I M14Rec  : encoder ready: c2.exynos.hevc.encoder (video/hevc) 3840x2160 @24fps 80 Mbps highSpeed=false
+10-23 22:22:47.299 23592 23634 I M14GL   : M14GL LUT 'Cinema Teal & Orange' active (33^3)
+10-23 22:22:47.591 23592 23631 I M14Rec  : video output format changed (c2.exynos.hevc.encoder)
+10-23 22:22:59.150 23592 23631 I M14Rec  : slate written for M14_R1_S1_T4_20261023_222258 (goodTake=false)
+10-23 22:22:59.150 23592 23631 I M14Rec  : REC start: M14_R1_S1_T4_20261023_222258
+10-23 22:22:59.163 23592 23631 I M14Rec  : MUX video+audio
+10-23 22:23:04.383 23592 23631 I M14Rec  : REC stop: M14_R1_S1_T4_20261023_222258 — finalizing in 300 ms
+10-23 22:23:04.818 23592 23631 I M14Rec  : published content://media/external/video/media/1000032523
+10-23 22:23:04.993 23592 23631 I M14Rec  : take finalized: M14_R1_S1_T4_20261023_222258 frames=132 durationMs=5954
+10-23 22:26:35.957 23592 23592 I M14Hud  : Format -> UHD_4K_30; rebuilding session
+10-23 22:26:36.043 23592 23592 I M14Rec  : encoder ready: c2.exynos.hevc.encoder (video/hevc) 3840x2160 @30fps 80 Mbps highSpeed=false
+10-23 22:26:36.942 23592 23631 I M14Rec  : video output format changed (c2.exynos.hevc.encoder)
+10-23 22:26:38.354 23592 23592 I M14Hud  : Format -> UHD_4K_24; rebuilding session
+10-23 22:26:38.433 23592 23592 I M14Rec  : encoder ready: c2.exynos.hevc.encoder (video/hevc) 3840x2160 @24fps 80 Mbps highSpeed=false
+10-23 22:26:39.233 23592 23631 I M14Rec  : video output format changed (c2.exynos.hevc.encoder)
+10-23 22:26:52.687 23592 23634 I M14GL   : M14GL LUT 'Warm Fade' active (33^3)
+10-23 22:26:58.898 23592 23634 I M14GL   : M14GL onSurfaceChanged: 2343x1080
+10-23 22:27:02.671 23592 23634 I M14GL   : M14GL LUT 'Mono Contrast' active (33^3)
+10-23 22:27:08.066 23592 23634 I M14GL   : M14GL onSurfaceChanged: 2343x1080
+10-23 22:27:08.116 23592 23634 I M14GL   : M14GL onSurfaceChanged: 2343x1080
+10-23 22:27:11.876 23592 23634 I M14GL   : M14GL LUT 'Neutral Rec.709' active (33^3)
+10-23 22:28:17.558 23592 23634 I M14GL   : M14GL onSurfaceChanged: 2343x1080
+10-23 22:28:19.884 23592 23634 I M14GL   : M14GL onSurfaceChanged: 2343x1080
+10-23 22:30:01.362 25182 25182 I M14Hud  : Engine initialized; waiting for preview texture + session
+10-23 22:30:01.558 25182 25232 I M14GL   : M14GL onSurfaceCreated: Mali-G68
+10-23 22:30:01.752 25182 25232 I M14GL   : M14GL luminance LUT baked (33^3)
+10-23 22:30:01.757 25182 25232 W M14Cam  : thread priority set failed
+10-23 22:30:01.757 25182 25232 W M14Cam  : java.lang.IllegalArgumentException: Given thread -1 does not exist
+10-23 22:30:01.757 25182 25232 W M14Cam  : 	at android.os.Process.setThreadPriority(Native Method)
+10-23 22:30:01.757 25182 25232 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.ensureHandler(CameraEngine.kt:622)
+10-23 22:30:01.757 25182 25232 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.open(CameraEngine.kt:158)
+10-23 22:30:01.757 25182 25232 W M14Cam  : 	at com.m14.cinepro.MainActivity.maybeStartCamera(MainActivity.kt:250)
+10-23 22:30:01.757 25182 25232 W M14Cam  : 	at com.m14.cinepro.MainActivity.access$maybeStartCamera(MainActivity.kt:42)
+10-23 22:30:01.757 25182 25232 W M14Cam  : 	at com.m14.cinepro.MainActivity$initEngine$3.invoke(MainActivity.kt:218)
+10-23 22:30:01.757 25182 25232 W M14Cam  : 	at com.m14.cinepro.MainActivity$initEngine$3.invoke(MainActivity.kt:219)
+10-23 22:30:01.757 25182 25232 W M14Cam  : 	at com.m14.cinepro.gl.ViewfinderRenderer.onSurfaceCreated(ViewfinderRenderer.kt:201)
+10-23 22:30:01.757 25182 25232 W M14Cam  : 	at android.opengl.GLSurfaceView$GLThread.guardedRun(GLSurfaceView.java:1545)
+10-23 22:30:01.757 25182 25232 W M14Cam  : 	at android.opengl.GLSurfaceView$GLThread.run(GLSurfaceView.java:1276)
+10-23 22:30:01.763 25182 25232 I M14GL   : M14GL histogram ready: analysis 146x66, bins=64
+10-23 22:30:01.764 25182 25232 I M14GL   : M14GL onSurfaceChanged: 2343x1080
+10-23 22:30:02.066 25182 25182 I M14Rec  : encoder ready: c2.exynos.hevc.encoder (video/hevc) 3840x2160 @24fps 80 Mbps highSpeed=false
+10-23 22:30:02.531 25182 25225 I M14Rec  : video output format changed (c2.exynos.hevc.encoder)
+10-23 22:30:12.414 25182 25225 I M14Rec  : slate written for M14_R1_S1_T5_20261023_223011 (goodTake=false)
+10-23 22:30:12.415 25182 25225 I M14Rec  : REC start: M14_R1_S1_T5_20261023_223011
+10-23 22:30:12.427 25182 25225 I M14Rec  : MUX video+audio
+10-23 22:30:13.836 25182 25225 I M14Rec  : REC stop: M14_R1_S1_T5_20261023_223011 — finalizing in 300 ms
+10-23 22:30:14.320 25182 25225 I M14Rec  : published content://media/external/video/media/1000032529
+10-23 22:30:14.487 25182 25225 I M14Rec  : take finalized: M14_R1_S1_T5_20261023_223011 frames=41 durationMs=2181
+10-23 22:31:34.727 25182 25225 I M14Rec  : slate written for M14_R1_S1_T6_20261023_223134 (goodTake=false)
+10-23 22:31:34.728 25182 25225 I M14Rec  : REC start: M14_R1_S1_T6_20261023_223134
+10-23 22:31:34.731 25182 25225 I M14Rec  : MUX video+audio
+10-23 22:31:54.677 25182 25225 I M14Rec  : REC stop: M14_R1_S1_T6_20261023_223134 — finalizing in 300 ms
+10-23 22:31:55.118 25182 25225 I M14Rec  : published content://media/external/video/media/1000032534
+10-23 22:31:55.279 25182 25225 I M14Rec  : take finalized: M14_R1_S1_T6_20261023_223134 frames=0 durationMs=20624
+10-23 22:31:58.707 25182 25182 I M14Hud  : Format -> HD_720_60_HS; rebuilding session
+10-23 22:31:58.782 25182 25182 I M14Rec  : encoder ready: c2.exynos.hevc.encoder (video/hevc) 1280x720 @60fps 80 Mbps highSpeed=true
+10-23 22:31:59.277 25182 25256 W M14Cam  : createSession failed
+10-23 22:31:59.277 25182 25256 W M14Cam  : java.lang.IllegalArgumentException: Surface size 1920x1080 is not part of the high speed supported size list [1280x720]
+10-23 22:31:59.277 25182 25256 W M14Cam  : 	at android.hardware.camera2.utils.SurfaceUtils.checkConstrainedHighSpeedSurfaces(SurfaceUtils.java:266)
+10-23 22:31:59.277 25182 25256 W M14Cam  : 	at android.hardware.camera2.impl.CameraDeviceImpl.createCaptureSessionInternal(CameraDeviceImpl.java:860)
+10-23 22:31:59.277 25182 25256 W M14Cam  : 	at android.hardware.camera2.impl.CameraDeviceImpl.createConstrainedHighSpeedCaptureSession(CameraDeviceImpl.java:739)
+10-23 22:31:59.277 25182 25256 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.createSessionOutputs(CameraEngine.kt:410)
+10-23 22:31:59.277 25182 25256 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.createSession$lambda$6(CameraEngine.kt:235)
+10-23 22:31:59.277 25182 25256 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.$r8$lambda$VKblqCb2LOvFqJNFyAwbdFWhcWE(CameraEngine.kt:0)
+10-23 22:31:59.277 25182 25256 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine$$ExternalSyntheticLambda2.run(D8$$SyntheticClass:0)
+10-23 22:31:59.277 25182 25256 W M14Cam  : 	at android.os.Handler.handleCallback(Handler.java:959)
+10-23 22:31:59.277 25182 25256 W M14Cam  : 	at android.os.Handler.dispatchMessage(Handler.java:100)
+10-23 22:31:59.277 25182 25256 W M14Cam  : 	at android.os.Looper.loopOnce(Looper.java:257)
+10-23 22:31:59.277 25182 25256 W M14Cam  : 	at android.os.Looper.loop(Looper.java:342)
+10-23 22:31:59.277 25182 25256 W M14Cam  : 	at android.os.HandlerThread.run(HandlerThread.java:85)
+10-23 22:31:59.278 25182 25182 E M14Hud  : Engine error @ session
+10-23 22:31:59.278 25182 25182 E M14Hud  : java.lang.IllegalArgumentException: Surface size 1920x1080 is not part of the high speed supported size list [1280x720]
+10-23 22:31:59.278 25182 25182 E M14Hud  : 	at android.hardware.camera2.utils.SurfaceUtils.checkConstrainedHighSpeedSurfaces(SurfaceUtils.java:266)
+10-23 22:31:59.278 25182 25182 E M14Hud  : 	at android.hardware.camera2.impl.CameraDeviceImpl.createCaptureSessionInternal(CameraDeviceImpl.java:860)
+10-23 22:31:59.278 25182 25182 E M14Hud  : 	at android.hardware.camera2.impl.CameraDeviceImpl.createConstrainedHighSpeedCaptureSession(CameraDeviceImpl.java:739)
+10-23 22:31:59.278 25182 25182 E M14Hud  : 	at com.m14.cinepro.camera.CameraEngine.createSessionOutputs(CameraEngine.kt:410)
+10-23 22:31:59.278 25182 25182 E M14Hud  : 	at com.m14.cinepro.camera.CameraEngine.createSession$lambda$6(CameraEngine.kt:235)
+10-23 22:31:59.278 25182 25182 E M14Hud  : 	at com.m14.cinepro.camera.CameraEngine.$r8$lambda$VKblqCb2LOvFqJNFyAwbdFWhcWE(CameraEngine.kt:0)
+10-23 22:31:59.278 25182 25182 E M14Hud  : 	at com.m14.cinepro.camera.CameraEngine$$ExternalSyntheticLambda2.run(D8$$SyntheticClass:0)
+10-23 22:31:59.278 25182 25182 E M14Hud  : 	at android.os.Handler.handleCallback(Handler.java:959)
+10-23 22:31:59.278 25182 25182 E M14Hud  : 	at android.os.Handler.dispatchMessage(Handler.java:100)
+10-23 22:31:59.278 25182 25182 E M14Hud  : 	at android.os.Looper.loopOnce(Looper.java:257)
+10-23 22:31:59.278 25182 25182 E M14Hud  : 	at android.os.Looper.loop(Looper.java:342)
+10-23 22:31:59.278 25182 25182 E M14Hud  : 	at android.os.HandlerThread.run(HandlerThread.java:85)
+10-23 22:31:59.287 25182 25182 E M14Hud  : Camera session configuration failed
+10-23 22:32:04.472 25182 25182 I M14Hud  : Format -> FHD_1080_30; rebuilding session
+10-23 22:32:04.528 25182 25182 I M14Rec  : encoder ready: c2.exynos.hevc.encoder (video/hevc) 1920x1080 @30fps 80 Mbps highSpeed=false
+10-23 22:32:04.998 25182 25225 I M14Rec  : video output format changed (c2.exynos.hevc.encoder)
+10-23 22:32:11.570 25182 25182 I M14Hud  : Format -> HD_720_60_HS; rebuilding session
+10-23 22:32:11.645 25182 25182 I M14Rec  : encoder ready: c2.exynos.hevc.encoder (video/hevc) 1280x720 @60fps 80 Mbps highSpeed=true
+10-23 22:32:12.003 25182 25256 W M14Cam  : createSession failed
+10-23 22:32:12.003 25182 25256 W M14Cam  : java.lang.IllegalArgumentException: Surface size 1920x1080 is not part of the high speed supported size list [1280x720]
+10-23 22:32:12.003 25182 25256 W M14Cam  : 	at android.hardware.camera2.utils.SurfaceUtils.checkConstrainedHighSpeedSurfaces(SurfaceUtils.java:266)
+10-23 22:32:12.003 25182 25256 W M14Cam  : 	at android.hardware.camera2.impl.CameraDeviceImpl.createCaptureSessionInternal(CameraDeviceImpl.java:860)
+10-23 22:32:12.003 25182 25256 W M14Cam  : 	at android.hardware.camera2.impl.CameraDeviceImpl.createConstrainedHighSpeedCaptureSession(CameraDeviceImpl.java:739)
+10-23 22:32:12.003 25182 25256 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.createSessionOutputs(CameraEngine.kt:410)
+10-23 22:32:12.003 25182 25256 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.createSession$lambda$6(CameraEngine.kt:235)
+10-23 22:32:12.003 25182 25256 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.$r8$lambda$VKblqCb2LOvFqJNFyAwbdFWhcWE(CameraEngine.kt:0)
+10-23 22:32:12.003 25182 25256 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine$$ExternalSyntheticLambda2.run(D8$$SyntheticClass:0)
+10-23 22:32:12.003 25182 25256 W M14Cam  : 	at android.os.Handler.handleCallback(Handler.java:959)
+10-23 22:32:12.003 25182 25256 W M14Cam  : 	at android.os.Handler.dispatchMessage(Handler.java:100)
+10-23 22:32:12.003 25182 25256 W M14Cam  : 	at android.os.Looper.loopOnce(Looper.java:257)
+10-23 22:32:12.003 25182 25256 W M14Cam  : 	at android.os.Looper.loop(Looper.java:342)
+10-23 22:32:12.003 25182 25256 W M14Cam  : 	at android.os.HandlerThread.run(HandlerThread.java:85)
+10-23 22:32:12.004 25182 25182 E M14Hud  : Engine error @ session
+10-23 22:32:12.004 25182 25182 E M14Hud  : java.lang.IllegalArgumentException: Surface size 1920x1080 is not part of the high speed supported size list [1280x720]
+10-23 22:32:12.004 25182 25182 E M14Hud  : 	at android.hardware.camera2.utils.SurfaceUtils.checkConstrainedHighSpeedSurfaces(SurfaceUtils.java:266)
+10-23 22:32:12.004 25182 25182 E M14Hud  : 	at android.hardware.camera2.impl.CameraDeviceImpl.createCaptureSessionInternal(CameraDeviceImpl.java:860)
+10-23 22:32:12.004 25182 25182 E M14Hud  : 	at android.hardware.camera2.impl.CameraDeviceImpl.createConstrainedHighSpeedCaptureSession(CameraDeviceImpl.java:739)
+10-23 22:32:12.004 25182 25182 E M14Hud  : 	at com.m14.cinepro.camera.CameraEngine.createSessionOutputs(CameraEngine.kt:410)
+10-23 22:32:12.004 25182 25182 E M14Hud  : 	at com.m14.cinepro.camera.CameraEngine.createSession$lambda$6(CameraEngine.kt:235)
+10-23 22:32:12.004 25182 25182 E M14Hud  : 	at com.m14.cinepro.camera.CameraEngine.$r8$lambda$VKblqCb2LOvFqJNFyAwbdFWhcWE(CameraEngine.kt:0)
+10-23 22:32:12.004 25182 25182 E M14Hud  : 	at com.m14.cinepro.camera.CameraEngine$$ExternalSyntheticLambda2.run(D8$$SyntheticClass:0)
+10-23 22:32:12.004 25182 25182 E M14Hud  : 	at android.os.Handler.handleCallback(Handler.java:959)
+10-23 22:32:12.004 25182 25182 E M14Hud  : 	at android.os.Handler.dispatchMessage(Handler.java:100)
+10-23 22:32:12.004 25182 25182 E M14Hud  : 	at android.os.Looper.loopOnce(Looper.java:257)
+10-23 22:32:12.004 25182 25182 E M14Hud  : 	at android.os.Looper.loop(Looper.java:342)
+10-23 22:32:12.004 25182 25182 E M14Hud  : 	at android.os.HandlerThread.run(HandlerThread.java:85)
+10-23 22:32:12.016 25182 25182 E M14Hud  : Camera session configuration failed
+10-23 22:32:18.095 25182 25182 I M14Hud  : Format -> FHD_1080_30; rebuilding session
+10-23 22:32:18.167 25182 25182 I M14Rec  : encoder ready: c2.exynos.hevc.encoder (video/hevc) 1920x1080 @30fps 80 Mbps highSpeed=false
+10-23 22:32:18.638 25182 25225 I M14Rec  : video output format changed (c2.exynos.hevc.encoder)
+10-23 22:32:55.022 25182 25225 I M14Rec  : slate written for M14_R1_S1_T7_20261023_223254 (goodTake=false)
+10-23 22:32:55.023 25182 25225 I M14Rec  : REC start: M14_R1_S1_T7_20261023_223254
+10-23 22:32:55.033 25182 25225 I M14Rec  : MUX video+audio
+10-23 22:32:58.072 25182 25225 I M14Rec  : REC stop: M14_R1_S1_T7_20261023_223254 — finalizing in 300 ms
+10-23 22:32:58.514 25182 25225 I M14Rec  : published content://media/external/video/media/1000032539
+10-23 22:32:58.631 25182 25225 I M14Rec  : take finalized: M14_R1_S1_T7_20261023_223254 frames=100 durationMs=3748
+10-23 22:32:59.415 25182 25225 I M14Rec  : slate written for M14_R1_S1_T8_20261023_223259 (goodTake=false)
+10-23 22:32:59.416 25182 25225 I M14Rec  : REC start: M14_R1_S1_T8_20261023_223259
+10-23 22:32:59.418 25182 25225 I M14Rec  : MUX video+audio
+10-23 22:33:02.233 25182 25225 I M14Rec  : REC stop: M14_R1_S1_T8_20261023_223259 — finalizing in 300 ms
+10-23 22:33:02.645 25182 25225 I M14Rec  : published content://media/external/video/media/1000032544
+10-23 22:33:02.805 25182 25225 I M14Rec  : take finalized: M14_R1_S1_T8_20261023_223259 frames=0 durationMs=3523
+10-23 22:34:00.615 26300 26300 I M14Hud  : Engine initialized; waiting for preview texture + session
+10-23 22:34:00.764 26300 26382 I M14GL   : M14GL onSurfaceCreated: Mali-G68
+10-23 22:34:00.961 26300 26382 I M14GL   : M14GL luminance LUT baked (33^3)
+10-23 22:34:00.964 26300 26382 W M14Cam  : thread priority set failed
+10-23 22:34:00.964 26300 26382 W M14Cam  : java.lang.IllegalArgumentException: Given thread -1 does not exist
+10-23 22:34:00.964 26300 26382 W M14Cam  : 	at android.os.Process.setThreadPriority(Native Method)
+10-23 22:34:00.964 26300 26382 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.ensureHandler(CameraEngine.kt:622)
+10-23 22:34:00.964 26300 26382 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.open(CameraEngine.kt:158)
+10-23 22:34:00.964 26300 26382 W M14Cam  : 	at com.m14.cinepro.MainActivity.maybeStartCamera(MainActivity.kt:250)
+10-23 22:34:00.964 26300 26382 W M14Cam  : 	at com.m14.cinepro.MainActivity.access$maybeStartCamera(MainActivity.kt:42)
+10-23 22:34:00.964 26300 26382 W M14Cam  : 	at com.m14.cinepro.MainActivity$initEngine$3.invoke(MainActivity.kt:218)
+10-23 22:34:00.964 26300 26382 W M14Cam  : 	at com.m14.cinepro.MainActivity$initEngine$3.invoke(MainActivity.kt:219)
+10-23 22:34:00.964 26300 26382 W M14Cam  : 	at com.m14.cinepro.gl.ViewfinderRenderer.onSurfaceCreated(ViewfinderRenderer.kt:201)
+10-23 22:34:00.964 26300 26382 W M14Cam  : 	at android.opengl.GLSurfaceView$GLThread.guardedRun(GLSurfaceView.java:1545)
+10-23 22:34:00.964 26300 26382 W M14Cam  : 	at android.opengl.GLSurfaceView$GLThread.run(GLSurfaceView.java:1276)
+10-23 22:34:00.967 26300 26382 I M14GL   : M14GL histogram ready: analysis 146x66, bins=64
+10-23 22:34:00.967 26300 26382 I M14GL   : M14GL onSurfaceChanged: 2343x1080
+10-23 22:34:01.257 26300 26300 I M14Rec  : encoder ready: c2.exynos.hevc.encoder (video/hevc) 1920x1080 @30fps 80 Mbps highSpeed=false
+10-23 22:34:01.709 26300 26380 I M14Rec  : video output format changed (c2.exynos.hevc.encoder)
+10-23 22:53:23.144 29926 29926 I M14Hud  : Engine initialized; waiting for preview texture + session
+10-23 22:53:23.437 29926 29959 I M14GL   : M14GL onSurfaceCreated: Mali-G68
+10-23 22:53:23.786 29926 29959 I M14GL   : M14GL luminance LUT baked (33^3)
+10-23 22:53:23.797 29926 29959 W M14Cam  : thread priority set failed
+10-23 22:53:23.797 29926 29959 W M14Cam  : java.lang.IllegalArgumentException: Given thread -1 does not exist
+10-23 22:53:23.797 29926 29959 W M14Cam  : 	at android.os.Process.setThreadPriority(Native Method)
+10-23 22:53:23.797 29926 29959 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.ensureHandler(CameraEngine.kt:622)
+10-23 22:53:23.797 29926 29959 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.open(CameraEngine.kt:158)
+10-23 22:53:23.797 29926 29959 W M14Cam  : 	at com.m14.cinepro.MainActivity.maybeStartCamera(MainActivity.kt:250)
+10-23 22:53:23.797 29926 29959 W M14Cam  : 	at com.m14.cinepro.MainActivity.access$maybeStartCamera(MainActivity.kt:42)
+10-23 22:53:23.797 29926 29959 W M14Cam  : 	at com.m14.cinepro.MainActivity$initEngine$3.invoke(MainActivity.kt:218)
+10-23 22:53:23.797 29926 29959 W M14Cam  : 	at com.m14.cinepro.MainActivity$initEngine$3.invoke(MainActivity.kt:219)
+10-23 22:53:23.797 29926 29959 W M14Cam  : 	at com.m14.cinepro.gl.ViewfinderRenderer.onSurfaceCreated(ViewfinderRenderer.kt:201)
+10-23 22:53:23.797 29926 29959 W M14Cam  : 	at android.opengl.GLSurfaceView$GLThread.guardedRun(GLSurfaceView.java:1545)
+10-23 22:53:23.797 29926 29959 W M14Cam  : 	at android.opengl.GLSurfaceView$GLThread.run(GLSurfaceView.java:1276)
+10-23 22:53:23.812 29926 29959 I M14GL   : M14GL histogram ready: analysis 146x66, bins=64
+10-23 22:53:23.812 29926 29959 I M14GL   : M14GL onSurfaceChanged: 2343x1080
+10-23 22:53:24.395 29926 29926 I M14Rec  : encoder ready: c2.exynos.hevc.encoder (video/hevc) 1920x1080 @30fps 80 Mbps highSpeed=false
+10-23 22:53:24.970 29926 29957 I M14Rec  : video output format changed (c2.exynos.hevc.encoder)
+10-23 22:55:05.977 29926 29926 I M14Hud  : Format -> HD_720_60_HS; rebuilding session
+10-23 22:55:06.078 29926 29926 I M14Rec  : encoder ready: c2.exynos.hevc.encoder (video/hevc) 1280x720 @60fps 80 Mbps highSpeed=true
+10-23 22:55:06.426 29926 30004 W M14Cam  : createSession failed
+10-23 22:55:06.426 29926 30004 W M14Cam  : java.lang.IllegalArgumentException: Surface size 1920x1080 is not part of the high speed supported size list [1280x720]
+10-23 22:55:06.426 29926 30004 W M14Cam  : 	at android.hardware.camera2.utils.SurfaceUtils.checkConstrainedHighSpeedSurfaces(SurfaceUtils.java:266)
+10-23 22:55:06.426 29926 30004 W M14Cam  : 	at android.hardware.camera2.impl.CameraDeviceImpl.createCaptureSessionInternal(CameraDeviceImpl.java:860)
+10-23 22:55:06.426 29926 30004 W M14Cam  : 	at android.hardware.camera2.impl.CameraDeviceImpl.createConstrainedHighSpeedCaptureSession(CameraDeviceImpl.java:739)
+10-23 22:55:06.426 29926 30004 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.createSessionOutputs(CameraEngine.kt:410)
+10-23 22:55:06.426 29926 30004 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.createSession$lambda$6(CameraEngine.kt:235)
+10-23 22:55:06.426 29926 30004 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine.$r8$lambda$VKblqCb2LOvFqJNFyAwbdFWhcWE(CameraEngine.kt:0)
+10-23 22:55:06.426 29926 30004 W M14Cam  : 	at com.m14.cinepro.camera.CameraEngine$$ExternalSyntheticLambda2.run(D8$$SyntheticClass:0)
+10-23 22:55:06.426 29926 30004 W M14Cam  : 	at android.os.Handler.handleCallback(Handler.java:959)
+10-23 22:55:06.426 29926 30004 W M14Cam  : 	at android.os.Handler.dispatchMessage(Handler.java:100)
+10-23 22:55:06.426 29926 30004 W M14Cam  : 	at android.os.Looper.loopOnce(Looper.java:257)
+10-23 22:55:06.426 29926 30004 W M14Cam  : 	at android.os.Looper.loop(Looper.java:342)
+10-23 22:55:06.426 29926 30004 W M14Cam  : 	at android.os.HandlerThread.run(HandlerThread.java:85)
+10-23 22:55:06.426 29926 29926 E M14Hud  : Engine error @ session
+10-23 22:55:06.426 29926 29926 E M14Hud  : java.lang.IllegalArgumentException: Surface size 1920x1080 is not part of the high speed supported size list [1280x720]
+10-23 22:55:06.426 29926 29926 E M14Hud  : 	at android.hardware.camera2.utils.SurfaceUtils.checkConstrainedHighSpeedSurfaces(SurfaceUtils.java:266)
+10-23 22:55:06.426 29926 29926 E M14Hud  : 	at android.hardware.camera2.impl.CameraDeviceImpl.createCaptureSessionInternal(CameraDeviceImpl.java:860)
+10-23 22:55:06.426 29926 29926 E M14Hud  : 	at android.hardware.camera2.impl.CameraDeviceImpl.createConstrainedHighSpeedCaptureSession(CameraDeviceImpl.java:739)
+10-23 22:55:06.426 29926 29926 E M14Hud  : 	at com.m14.cinepro.camera.CameraEngine.createSessionOutputs(CameraEngine.kt:410)
+10-23 22:55:06.426 29926 29926 E M14Hud  : 	at com.m14.cinepro.camera.CameraEngine.createSession$lambda$6(CameraEngine.kt:235)
+10-23 22:55:06.426 29926 29926 E M14Hud  : 	at com.m14.cinepro.camera.CameraEngine.$r8$lambda$VKblqCb2LOvFqJNFyAwbdFWhcWE(CameraEngine.kt:0)
+10-23 22:55:06.426 29926 29926 E M14Hud  : 	at com.m14.cinepro.camera.CameraEngine$$ExternalSyntheticLambda2.run(D8$$SyntheticClass:0)
+10-23 22:55:06.426 29926 29926 E M14Hud  : 	at android.os.Handler.handleCallback(Handler.java:959)
+10-23 22:55:06.426 29926 29926 E M14Hud  : 	at android.os.Handler.dispatchMessage(Handler.java:100)
+10-23 22:55:06.426 29926 29926 E M14Hud  : 	at android.os.Looper.loopOnce(Looper.java:257)
+10-23 22:55:06.426 29926 29926 E M14Hud  : 	at android.os.Looper.loop(Looper.java:342)
+10-23 22:55:06.426 29926 29926 E M14Hud  : 	at android.os.HandlerThread.run(HandlerThread.java:85)
+10-23 22:55:06.479 29926 29926 E M14Hud  : Camera session configuration failed

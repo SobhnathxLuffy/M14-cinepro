@@ -75,8 +75,8 @@ class MainActivity : Activity(), HudController.Hooks {
         super.onCreate(savedInstanceState)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        applyImmersive()
         setContentView(R.layout.activity_main)
+        applyImmersive()
 
         val needed = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
         val missing = needed.filter {
@@ -150,9 +150,10 @@ class MainActivity : Activity(), HudController.Hooks {
 
     private fun applyImmersive() {
         if (Build.VERSION.SDK_INT >= 30) {
-            window.insetsController?.let { ic ->
-                ic.hide(WindowInsets.Type.systemBars())
-                ic.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            val ic = try { window.insetsController } catch (_: Throwable) { null }
+            ic?.let {
+                it.hide(WindowInsets.Type.systemBars())
+                it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
         } else {
             @Suppress("DEPRECATION")
