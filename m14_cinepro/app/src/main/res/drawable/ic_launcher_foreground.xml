@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Vector launcher icon: red record circle inside a lens ring, on dark background. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M54,54m-30,0a30,30 0,1 1,60 0a30,30 0,1 1,-60 0"
+        android:strokeWidth="6"
+        android:strokeColor="#F2F4F7"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M54,54m-15,0a15,15 0,1 1,30 0a15,15 0,1 1,-30 0"
+        android:fillColor="#D92828" />
+    <path
+        android:pathData="M30,18L78,18A4,4 0,0 1,82 22L82,26A4,4 0,0 1,78 30L30,30A4,4 0,0 1,26 26L26,22A4,4 0,0 1,30 18z"
+        android:fillColor="#3DDC84" />
+</vector>

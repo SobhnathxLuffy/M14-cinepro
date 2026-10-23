@@ -1,0 +1,6 @@
+// M14 CinePro — root build script.
+// AGP 8.4.1 + Gradle 8.7 + Kotlin 1.9.24 (JDK 17 required).
+plugins {
+    id 'com.android.application' version '8.4.1' apply false
+    id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
+}

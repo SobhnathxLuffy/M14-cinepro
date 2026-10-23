@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">M14 CinePro</string>
+
+    <!-- Top telemetry pills -->
+    <string name="pill_format">4K 24</string>
+    <string name="pill_bitrate">80M</string>
+    <string name="pill_shutter">180°</string>
+    <string name="pill_iso">ISO AUTO</string>
+    <string name="pill_wb">5600K</string>
+    <string name="pill_timecode">00:00:00:00</string>
+    <string name="pill_status">—</string>
+
+    <!-- Bottom monitoring bar -->
+    <string name="btn_peak">PEAK</string>
+    <string name="btn_zebra">ZEBRA</string>
+    <string name="btn_false_color">FC</string>
+    <string name="btn_lut">LUT</string>
+    <string name="btn_guides">GUIDES</string>
+    <string name="btn_desqueeze">SQUEEZE</string>
+    <string name="marker_f1">F1</string>
+    <string name="marker_f2">F2</string>
+    <string name="marker_f3">F3</string>
+
+    <!-- Transport -->
+    <string name="btn_record">REC</string>
+    <string name="btn_slate">SLATE</string>
+    <string name="btn_eis">EIS</string>
+    <string name="btn_torch">TORCH</string>
+
+    <!-- Slate dialog -->
+    <string name="slate_title">Cinema Slate</string>
+    <string name="slate_reel">Reel</string>
+    <string name="slate_scene">Scene</string>
+    <string name="slate_take">Take</string>
+    <string name="slate_good_take">Good Take</string>
+    <string name="slate_director">Director</string>
+    <string name="slate_operator">Operator</string>
+    <string name="slate_ok">Save</string>
+    <string name="slate_cancel">Cancel</string>
+
+    <!-- Errors / status -->
+    <string name="err_camera">Camera error</string>
+    <string name="err_storage">Storage error</string>
+    <string name="err_lut_import">This LUT cannot be imported</string>
+    <string name="rec_time_remaining">rec</string>
+</resources>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="hud_bg">#CC0A0C10</color>
+    <color name="hud_pill_bg">#B314181F</color>
+    <color name="hud_pill_active">#F0145038</color>
+    <color name="hud_accent">#FF3DDC84</color>
+    <color name="hud_record_red">#FFD92828</color>
+    <color name="hud_text_primary">#FFF2F4F7</color>
+    <color name="hud_text_dim">#FF9AA3AE</color>
+    <color name="panel_bg">#E60D0F14</color>
+    <color name="zebra_hint">#FFFFD646</color>
+    <color name="ic_launcher_background">#FF0A0C10</color>
+</resources>
