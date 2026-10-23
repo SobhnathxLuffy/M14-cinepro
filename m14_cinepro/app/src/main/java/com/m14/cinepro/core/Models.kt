@@ -216,7 +216,7 @@ class SettingsStore(context: Context) {
         set(v) { field = v; persist("awbLock", v) }
 
     // ---- Focus markers F1/F2/F3 (normalized viewfinder coords; null = unset) ----
-    @Volatile val focusMarkers: Array<FloatArray?> = arrayOfNulls(3)
+    val focusMarkers: Array<FloatArray?> = arrayOfNulls(3)
 
     // ---- Viewfinder effects ----
     @Volatile var peakingMode: Models.PeakingMode = Models.PeakingMode.OFF
@@ -234,7 +234,7 @@ class SettingsStore(context: Context) {
     @Volatile var lutPreset: Models.LutPreset = Models.LutPreset.OFF
         set(v) { field = v; persist("lutPreset", v.name) }
     @Volatile var importedLutPath: String? = null
-        set(v) { field = v; persist("importedLutPath", v) }
+        set(v) { field = v; persist("importedLutPath", v ?: "") }
     @Volatile var guide: Models.GuidePreset = Models.GuidePreset.OFF
         set(v) { field = v; persist("guide", v.name) }
     @Volatile var grid: Models.GridOverlay = Models.GridOverlay.NONE
@@ -296,7 +296,7 @@ class SettingsStore(context: Context) {
 
     /** Snapshot of the settings relevant to clip metadata / slate. */
     fun describeForMetadata(): String =
-        "${resolution.label} ${fps}fps ${shutterLabel()} $isoLabel() ${wbLabel()} LUT=${lutPreset.name}"
+        "${resolution.label} ${fps}fps ${shutterLabel()} ${isoLabel()} ${wbLabel()} LUT=${lutPreset.name}"
 
     // ---- Persistence helpers ----
 

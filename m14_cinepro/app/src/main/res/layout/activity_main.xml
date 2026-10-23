@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  M14 CinePro — MainActivity layout.
+  Intentionally minimal: the GL viewfinder (com.m14.cinepro.gl.GlViewfinder) and the entire
+  cinema HUD are built PROGRAMMATICALLY (see HudController). This root FrameLayout is the
+  single container everything is layered into:
+    [0] GlViewfinder           (added at index 0 by MainActivity)
+    [1] GuidesOverlayView      (added by HudController)
+    [2] FocusOverlayView       (added by HudController)
+    [3] top bar                (added by HudController)
+    [4] bottom container       (added by HudController)
+    [5] transport strip        (added by HudController)
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/hud_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black"
+    android:keepScreenOn="true" />
