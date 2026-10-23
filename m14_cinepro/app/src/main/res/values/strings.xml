@@ -27,6 +27,7 @@
     <string name="btn_slate">SLATE</string>
     <string name="btn_eis">EIS</string>
     <string name="btn_torch">TORCH</string>
+    <string name="btn_lock">A/AF LOCK</string>
 
     <!-- Slate dialog -->
     <string name="slate_title">Cinema Slate</string>

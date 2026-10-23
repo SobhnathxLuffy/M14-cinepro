@@ -209,11 +209,15 @@ class CameraEngine(
      * Build the capture session for [settings.resolution].
      *
      * Outputs: [recordSurface] (encoder input; may be null for preview-only operation) plus the
-     * mandatory 1920x1080 viewfinder surface created from [previewTexture]
-     * (setDefaultBufferSize(1920, 1080) is applied to the SurfaceTexture BEFORE the Surface is
-     * created — Architecture A law). Regular resolutions use
-     * SessionConfiguration(SESSION_REGULAR); high-speed resolutions use
-     * createConstrainedHighSpeedCaptureSession and a createHighSpeedRequestList repeating burst.
+     * viewfinder surface created from [previewTexture]. The preview buffer is set to
+     * 1920x1080 in regular sessions and to the resolution's own size (1280x720) in the
+     * high-speed session — the M14 constrained-high-speed pipeline accepts exactly one surface
+     * size, `[1280x720]`, and attaching a 1920x1080 preview surface throws
+     * `IllegalArgumentException: Surface size 1920x1080 is not part of the high speed supported
+     * size list` (V1_BUG_LOG). CP3 law: BOTH the preview buffer AND the MediaCodec surface are
+     * 1280x720 in the 720p 60 fps mode. Regular resolutions use SessionConfiguration(SESSION_REGULAR);
+     * high-speed resolutions use createConstrainedHighSpeedCaptureSession and a
+     * createHighSpeedRequestList repeating burst.
      *
      * [onConfigured] is invoked exactly once on the main thread with the outcome; on failure one
      * automatic rebuild is attempted before reporting false.
@@ -225,7 +229,14 @@ class CameraEngine(
             currentPreviewTexture = previewTexture
             sessionRebuildAttempted = false
             try {
-                previewTexture.setDefaultBufferSize(Models.VIEWFINDER_WIDTH, Models.VIEWFINDER_HEIGHT)
+                val p = settings.resolution
+                if (p.highSpeed) {
+                    // CP3 law: the HS HAL only accepts [1280x720] — the preview buffer must match
+                    // the encoder size exactly or the session is rejected.
+                    previewTexture.setDefaultBufferSize(p.width, p.height)
+                } else {
+                    previewTexture.setDefaultBufferSize(Models.VIEWFINDER_WIDTH, Models.VIEWFINDER_HEIGHT)
+                }
             } catch (t: Throwable) {
                 Log.w(TAG, "setDefaultBufferSize failed", t)
             }
@@ -618,13 +629,19 @@ class CameraEngine(
         if (thread == null || !thread.isAlive) {
             thread = HandlerThread("CameraEngine")
             thread.start()
-            try {
-                Process.setThreadPriority(thread.threadId, CAM_THREAD_PRIORITY)
-            } catch (t: Throwable) {
-                Log.w(TAG, "thread priority set failed", t)
-            }
             handlerThread = thread
-            camHandler = Handler(thread.looper)
+            val handler = Handler(thread.looper)
+            camHandler = handler
+            // Priority is set from INSIDE the thread: Thread.threadId is still -1 before the
+            // thread has run, and setThreadPriority(-1, ...) throws "Given thread -1 does not
+            // exist" (V1_BUG_LOG, every open). First runnable = deterministic tid.
+            handler.post {
+                try {
+                    Process.setThreadPriority(Process.myTid(), CAM_THREAD_PRIORITY)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "thread priority set failed", t)
+                }
+            }
         } else if (camHandler == null) {
             camHandler = Handler(thread.looper)
         }

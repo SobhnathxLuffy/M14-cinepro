@@ -542,13 +542,18 @@ class RecordingController(
             muxerStarted = false
             pendingAudio.clear()
 
-            // Force IDR at record start (vendor key, stage5 §3 — mk7.f() equivalent).
+            // Force IDR at record start + re-enable encoder input (vendor keys, stage5 §3 law —
+            // mk7.f() equivalent: start = "drop-input-frames"=0 AND "request-sync"=0). V1 only
+            // reset request-sync, so after the first take's stop ("drop-input-frames"=1) every
+            // later take fed a drop-everything encoder and muxed 0 video frames (V1_BUG_LOG:
+            // "frames=0 durationMs=20624").
             try {
                 val sync = Bundle()
+                sync.putInt("drop-input-frames", 0)
                 sync.putInt("request-sync", 0)
                 codec?.setParameters(sync)
             } catch (e: Throwable) {
-                Log.w(TAG, "request-sync unsupported by ${currentCodecName}: ${e.message}")
+                Log.w(TAG, "vendor start params unsupported by ${currentCodecName}: ${e.message}")
             }
 
             // Audio: format arrives via callback -> drain thread -> addTrack after video track.

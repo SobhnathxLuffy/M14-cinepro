@@ -63,8 +63,12 @@ object Models {
     /** Zebra display mode (stage4_shaders.md §4; mid-grey bands are 10-bit Y code values /1024). */
     enum class ZebraMode { OFF, Z95, Z90, MID_GREY, MID_GREY_PLUS1 }
 
-    /** Built-in 33^3 LUTs + user .cube import (stage4_shaders.md §7). */
-    enum class LutPreset { OFF, NEUTRAL_709, TEAL_ORANGE, WARM_FADE, MONO_CONTRAST, IMPORTED }
+    /**
+     * Built-in 33^3 film-emulation LUTs + user .cube import (stage4_shaders.md §7).
+     * V2 generator family: Rec.709 soft-shoulder, YIQ skin-protected Teal & Orange,
+     * Kodak 2383 print curve, Fujifilm Eterna, Panchromatic B&W.
+     */
+    enum class LutPreset { OFF, NEUTRAL_709, TEAL_ORANGE, KODAK_2383, ETERNA, WARM_FADE, MONO_CONTRAST, IMPORTED }
 
     enum class WbPreset { AUTO, DAYLIGHT, CLOUDY_DAYLIGHT, INCANDESCENT, FLUORESCENT, KELVIN }
 
@@ -121,9 +125,34 @@ object Models {
     const val ZEBRA_WIDTH_PX = 8.0f
     const val ZEBRA_DEFAULT_UI_THRESHOLD = 0.75f
 
-    /** Viewfinder is always 1920x1080 (Architecture A law). */
+    /** Viewfinder stream is 1920x1080 in regular sessions, 1280x720 in the HFR session. */
     const val VIEWFINDER_WIDTH = 1920
     const val VIEWFINDER_HEIGHT = 1080
+
+    /** The viewfinder picture is always exact 16:9 (CP1 law). */
+    const val PICTURE_ASPECT = 16f / 9f
+
+    /**
+     * CP1 16:9 viewport-lock law: the viewfinder picture is the largest centered 16:9 rect
+     * inside a [screenW] x [screenH] window (e.g. 1920x1080 centered inside 2343x1080),
+     * everything else is cleared black (pillar/letterbox). Shared by the GL renderer (GL-space
+     * viewport, y origin bottom-left but vertically symmetric) and the HUD overlays
+     * (view-space, y origin top-left).
+     * @return floatArrayOf(left, top, width, height)
+     */
+    fun pictureRect(screenW: Int, screenH: Int): FloatArray {
+        val w = screenW.coerceAtLeast(1)
+        val h = screenH.coerceAtLeast(1)
+        var pw = w.toFloat()
+        var ph = pw / PICTURE_ASPECT
+        if (ph > h) {
+            ph = h.toFloat()
+            pw = ph * PICTURE_ASPECT
+        }
+        val left = (w - pw) * 0.5f
+        val top = (h - ph) * 0.5f
+        return floatArrayOf(left, top, pw, ph)
+    }
 
     /** Gyro-EIS crop: 10% in (0.9 scale) for counter-rotation headroom. */
     const val EIS_CROP_SCALE = 0.9f

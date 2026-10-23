@@ -29,6 +29,14 @@
         android:largeHeap="true"
         tools:targetApi="34">
 
+        <!-- Android 15 compatibility crop kill switch (CP1 law): without this property the
+             compat framework may letter-box/crop the sensorLandscape activity as if it were a
+             portrait app, re-breaking the viewfinder geometry on the M14 5G. -->
+        <property
+            android:name="android.camera.PROPERTY_COMPAT_OVERRIDE_LANDSCAPE_TO_PORTRAIT"
+            android:value="false" />
+
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

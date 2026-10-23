@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
+import com.m14.cinepro.core.Models
 import com.m14.cinepro.core.SettingsStore
 import kotlin.math.abs
 
@@ -67,8 +68,11 @@ class FocusOverlayView(context: Context, private val settings: SettingsStore) : 
         override fun onDown(e: MotionEvent): Boolean = true
 
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            val nx = (e.x / width.coerceAtLeast(1)).coerceIn(0f, 1f)
-            val ny = (e.y / height.coerceAtLeast(1)).coerceIn(0f, 1f)
+            // CP1 law: taps map through the 16:9 picture rect (the GL letterbox), not the full
+            // window — pillar/letterbox taps clamp to the picture edge.
+            val pic = Models.pictureRect(width, height)
+            val nx = ((e.x - pic[0]) / pic[2].coerceAtLeast(1f)).coerceIn(0f, 1f)
+            val ny = ((e.y - pic[1]) / pic[3].coerceAtLeast(1f)).coerceIn(0f, 1f)
             showTapBox(nx, ny)
             onTap?.invoke(nx, ny)
             return true
@@ -116,25 +120,32 @@ class FocusOverlayView(context: Context, private val settings: SettingsStore) : 
         val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
 
-        drawMarkers(canvas, w, h)
+        // CP1 law: the live picture is the centered 16:9 rect — reticle + markers map into it.
+        val pic = Models.pictureRect(width, height)
+        val picLeft = pic[0]
+        val picTop = pic[1]
+        val picW = pic[2]
+        val picH = pic[3]
+
+        drawMarkers(canvas, picLeft, picTop, picW, picH)
 
         if (tapStartMs > 0L) {
             val elapsed = SystemClock.uptimeMillis() - tapStartMs
             if (elapsed >= TAP_BOX_ANIM_MS) {
                 tapStartMs = 0L
             } else {
-                drawTapBox(canvas, w, h, elapsed / TAP_BOX_ANIM_MS.toFloat())
+                drawTapBox(canvas, picLeft, picTop, picW, picH, elapsed / TAP_BOX_ANIM_MS.toFloat())
                 postInvalidateOnAnimation()
             }
         }
     }
 
-    private fun drawTapBox(canvas: Canvas, w: Float, h: Float, progress: Float) {
+    private fun drawTapBox(canvas: Canvas, picLeft: Float, picTop: Float, picW: Float, picH: Float, progress: Float) {
         // Box settles from a large bracket ring down to the target size while fading out.
         val targetHalf = 34f * density
         val half = targetHalf + (1f - progress) * 22f * density
-        val cx = tapNx * w
-        val cy = tapNy * h
+        val cx = picLeft + tapNx * picW
+        val cy = picTop + tapNy * picH
         val len = half * 0.42f
         val prevAlpha = bracketPaint.alpha
         bracketPaint.alpha = ((1f - progress) * 255f).toInt().coerceIn(0, 255)
@@ -159,11 +170,11 @@ class FocusOverlayView(context: Context, private val settings: SettingsStore) : 
         bracketPaint.alpha = prevAlpha
     }
 
-    private fun drawMarkers(canvas: Canvas, w: Float, h: Float) {
+    private fun drawMarkers(canvas: Canvas, picLeft: Float, picTop: Float, picW: Float, picH: Float) {
         for (i in 0..2) {
             val m = settings.focusMarkers.getOrNull(i) ?: continue
-            val cx = m[0] * w
-            val cy = m[1] * h
+            val cx = picLeft + m[0] * picW
+            val cy = picTop + m[1] * picH
             val r = 9f * density
             canvas.drawCircle(cx, cy, r, markerFillPaint)
             canvas.drawCircle(cx, cy, r, markerPaint)

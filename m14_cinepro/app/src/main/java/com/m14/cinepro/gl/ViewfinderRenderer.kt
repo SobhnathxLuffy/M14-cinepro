@@ -9,6 +9,8 @@ import android.opengl.Matrix
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
+import android.view.Surface
+import android.view.View
 import com.m14.cinepro.core.EngineListener
 import com.m14.cinepro.core.Models
 import com.m14.cinepro.core.SettingsStore
@@ -21,10 +23,13 @@ import javax.microedition.khronos.opengles.GL10
 /**
  * M14 CinePro — the GL viewfinder renderer (stage4_shaders.md §1, §7.4, §10.2, §10.3, §10.5).
  *
- * Per frame: SurfaceTexture.updateTexImage() -> compose texMatrix = ST * EIS (EIS right
- * operand, applied to texcoords first) -> master program full-screen quad ->
- * every Models.HISTOGRAM_INTERVAL_MS draw the graded overlay-free frame into the analysis FBO
- * and dispatch the 64-bin RGB histogram compute + readback -> EngineListener.onHistogram.
+ * Per frame: SurfaceTexture.updateTexImage() -> compose texMatrix = R_display · ST · EIS
+ * (R_display = CP1 counter-rotation for Display.getRotation() about the texture center;
+ * EIS is the right operand, applied to texcoords first) -> master program quad drawn into the
+ * exact 16:9 picture rect (Models.pictureRect, centered pillar/letterbox, outside cleared
+ * black) -> every Models.HISTOGRAM_INTERVAL_MS draw the graded overlay-free frame into the
+ * analysis FBO and dispatch the 64-bin RGB histogram compute + readback ->
+ * EngineListener.onHistogram.
  *
  * Master fragment assembly (§10.2 EXACT): assets/glsl/fragment_header.glsl + wb_trim_effect +
  * luminance_function + lut_3d_effect + false_color_effect_fast + zebra_effect +
@@ -123,6 +128,13 @@ class ViewfinderRenderer(
     // Frame state
     private val stMatrix = FloatArray(16)
     private val combinedMatrix = FloatArray(16)
+    private val displayRotMatrix = FloatArray(16)
+    private val tmpMatrix = FloatArray(16)
+    private var displayRotationApplied = Int.MIN_VALUE
+    private var pictureLeft = 0
+    private var pictureTop = 0
+    private var pictureWidth = 0
+    private var pictureHeight = 0
     private var outW = 0
     private var outH = 0
     private val histogramEngine = HistogramEngine(context)
@@ -205,9 +217,18 @@ class ViewfinderRenderer(
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
         outW = width
         outH = height
-        GLES32.glViewport(0, 0, width, height)
+        updatePictureRect()
         histogramEngine.setup(width, height)
-        Log.i(TAG, "M14GL onSurfaceChanged: ${width}x${height}")
+        Log.i(TAG, "M14GL onSurfaceChanged: ${width}x${height} picture=${pictureWidth}x${pictureHeight}")
+    }
+
+    /** CP1 16:9 letterbox law: picture rect = largest centered 16:9 rect of the surface. */
+    private fun updatePictureRect() {
+        val rect = Models.pictureRect(outW, outH)
+        pictureLeft = rect[0].toInt()
+        pictureTop = rect[1].toInt()
+        pictureWidth = rect[2].toInt()
+        pictureHeight = rect[3].toInt()
     }
 
     override fun onDrawFrame(gl: GL10?) {
@@ -238,15 +259,43 @@ class ViewfinderRenderer(
         st.updateTexImage()
         st.getTransformMatrix(stMatrix)
         val eis = eisMatrixProvider?.invoke()
+        val stEis = combinedMatrix
         if (eis != null && eis.size >= 16) {
-            Matrix.multiplyMM(combinedMatrix, 0, stMatrix, 0, eis, 0)
+            Matrix.multiplyMM(stEis, 0, stMatrix, 0, eis, 0)
         } else {
-            System.arraycopy(stMatrix, 0, combinedMatrix, 0, 16)
+            System.arraycopy(stMatrix, 0, stEis, 0, 16)
         }
 
-        // ---- Screen pass: master program, all effects per settings ----
+        // CP1 law: counter-rotate the SurfaceTexture transform for the current display
+        // rotation around the texture center (0.5, 0.5). The M14 sensor orientation is 90 and
+        // the ST matrix is portrait-referenced; in a landscape window the image shows rotated
+        // 90° unless the sampling coords are counter-rotated by (360 - rotation*90) % 360:
+        // 270° for ROTATION_90, 90° for ROTATION_270, 0° for ROTATION_0, 180° for ROTATION_180.
+        val host = host
+        val rotation = if (host != null && host.isAttachedToWindow) {
+            try { host.display?.rotation ?: Surface.ROTATION_0 } catch (t: Throwable) { Surface.ROTATION_0 }
+        } else {
+            Surface.ROTATION_0
+        }
+        if (rotation != displayRotationApplied) {
+            displayRotationApplied = rotation
+            val degrees = ((360f - rotation * 90f) % 360f + 360f) % 360f
+            Matrix.setIdentityM(displayRotMatrix, 0)
+            Matrix.translateM(displayRotMatrix, 0, 0.5f, 0.5f, 0f)
+            Matrix.rotateM(displayRotMatrix, 0, degrees, 0f, 0f, 1f)
+            Matrix.translateM(displayRotMatrix, 0, -0.5f, -0.5f, 0f)
+            Log.i(TAG, "M14GL display counter-rotation ${degrees.toInt()}° (rotation=$rotation)")
+        }
+        val rotated = tmpMatrix
+        Matrix.multiplyMM(rotated, 0, displayRotMatrix, 0, stEis, 0)
+
+        // ---- Screen pass: black pillar/letterbox bars, then the 16:9 picture rect ----
         GLES32.glBindFramebuffer(GLES32.GL_FRAMEBUFFER, 0)
         GLES32.glViewport(0, 0, outW, outH)
+        GLES32.glClear(GLES32.GL_COLOR_BUFFER_BIT)
+        // GL viewport origin is bottom-left; the rect is vertically centered, so the view-space
+        // top offset equals the GL-space bottom offset.
+        GLES32.glViewport(pictureLeft, pictureTop, pictureWidth, pictureHeight)
         GLES32.glUseProgram(program)
 
         GLES32.glActiveTexture(GLES32.GL_TEXTURE0)
@@ -257,8 +306,8 @@ class ViewfinderRenderer(
         GLES32.glBindTexture(GLES32.GL_TEXTURE_3D, lumTex3D)
         GLES32.glActiveTexture(GLES32.GL_TEXTURE0)
 
-        uMat4("texMatrix", combinedMatrix)
-        applyUniforms(effectsVisible = true)
+        uMat4("texMatrix", rotated)
+        applyUniforms(effectsVisible = true, pictureW = pictureWidth, pictureH = pictureHeight)
         drawQuad()
 
         // ---- Histogram pass: graded (LUT-applied), overlay-free, at 10 fps ----
@@ -266,7 +315,7 @@ class ViewfinderRenderer(
         if (histogramEngine.isReady() && now - lastHistogramMs >= Models.HISTOGRAM_INTERVAL_MS) {
             lastHistogramMs = now
             GLES32.glUseProgram(program)
-            applyUniforms(effectsVisible = false)
+            applyUniforms(effectsVisible = false, pictureW = pictureWidth, pictureH = pictureHeight)
             histogramEngine.drawGradedFrame { drawQuad() }
             val bins = histogramEngine.dispatchAndRead()
             if (bins != null) listener.onHistogram(bins)
@@ -389,7 +438,7 @@ class ViewfinderRenderer(
      * [effectsVisible] = true for the screen pass, false for the histogram FBO pass
      * (areEffectsVisible=0 -> "LUT-applied, overlay-free" law; wbTrim + 3D LUT stay live).
      */
-    private fun applyUniforms(effectsVisible: Boolean) {
+    private fun applyUniforms(effectsVisible: Boolean, pictureW: Int, pictureH: Int) {
         val anyOverlay = settings.peakingMode != Models.PeakingMode.OFF ||
             settings.zebraMode != Models.ZebraMode.OFF ||
             settings.falseColorOn
@@ -429,8 +478,9 @@ class ViewfinderRenderer(
         u1f("zebraShift", zebraShift)
         u1f("zebraWidth", Models.ZEBRA_WIDTH_PX)
         u4f("zebraColor", 1.0f, 0.85f, 0.27f, 1.0f) // YELLOW (task law)
-        u1i("outWidth", outW)
-        u1i("outHeight", outH)
+        // Zebra/peaking stripe space = the 16:9 picture rect (CP1 letterbox), not the surface.
+        u1i("outWidth", pictureW)
+        u1i("outHeight", pictureH)
 
         // Focus peaking.
         u1i("focusAssistVisible", if (settings.peakingMode != Models.PeakingMode.OFF) 1 else 0)
@@ -444,16 +494,17 @@ class ViewfinderRenderer(
      * Zebra mode -> (midGreyMode, zebraThreshold).
      *  Z95/Z90: midGreyMode 0, anchored thresholds 0.95 / 0.90 scaled by the Rec.709 display
      *  profile factor (Models.ZEBRA_THRESHOLD_SCALE_709 = 0.93, stage4 §10.3).
-     *  MID_GREY / MID_GREY_PLUS1: midGreyMode 1 / 2 with zebraThreshold = 0.0 (threshold
-     *  irrelevant when the mid-grey band drives — task law; NOTE the include ORs both
-     *  conditions, flagged in the worklog).
+     *  MID_GREY / MID_GREY_PLUS1: midGreyMode 1 / 2. The include ORs the threshold with the
+     *  band condition (max()), so the threshold must be pushed above the L* domain (2.0) to
+     *  kill `thresholdCondition` — otherwise step(0, L*) = 1 stripes the WHOLE frame (V1 bug,
+     *  worklog flag). Only the mid-grey band stripes.
      *  OFF / custom: the persisted UI threshold * 0.93 (values unused while visible = 0).
      */
     private fun zebraUniformParams(): Pair<Int, Float> = when (settings.zebraMode) {
         Models.ZebraMode.Z95 -> 0 to (0.95f * Models.ZEBRA_THRESHOLD_SCALE_709)
         Models.ZebraMode.Z90 -> 0 to (0.90f * Models.ZEBRA_THRESHOLD_SCALE_709)
-        Models.ZebraMode.MID_GREY -> 1 to 0.0f
-        Models.ZebraMode.MID_GREY_PLUS1 -> 2 to 0.0f
+        Models.ZebraMode.MID_GREY -> 1 to 2.0f
+        Models.ZebraMode.MID_GREY_PLUS1 -> 2 to 2.0f
         Models.ZebraMode.OFF -> 0 to (settings.zebraThresholdUi * Models.ZEBRA_THRESHOLD_SCALE_709)
     }
 

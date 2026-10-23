@@ -11,7 +11,6 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.text.TextUtils
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
@@ -20,9 +19,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
-import android.widget.PopupWindow
 import android.widget.SeekBar
-import android.widget.Space
 import android.widget.TextView
 import com.m14.cinepro.R
 import com.m14.cinepro.core.Models
@@ -34,19 +31,23 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * M14 CinePro — programmatic landscape cinema HUD.
+ * M14 CinePro — the 3-zone Blackmagic landscape HUD (CP8 law, V2 rewrite).
  *
- * Layered into the activity's [R.id.hud_root] FrameLayout (the GL viewfinder sits at index 0,
- * added by MainActivity):
+ * Layered into the activity's [R.id.hud_root] FrameLayout (the full-screen GL viewfinder sits at
+ * index 0, added by MainActivity):
  *
- *   [1] GuidesOverlayView   — aspect masks / grids / de-squeeze annotation
- *   [2] FocusOverlayView    — tap box animation + F1/F2/F3 markers, owns viewfinder gestures
- *   [3] Top bar             — FORMAT BITRATE SHUTTER ISO WB TIMECODE STATUS pills
- *   [4] Bottom container    — histogram + audio meter row, then toggle pill bar
- *   [5] Transport strip     — REC / SLATE / EIS / TORCH
+ *   [1] GuidesOverlayView — aspect masks / grids / de-squeeze (mapped to the 16:9 picture rect)
+ *   [2] FocusOverlayView  — tap reticle + F1/F2/F3 markers, owns picture-area gestures
+ *   [3] topZone           — TOP bar (48 dp): FPS SHUTTER IRIS ISO WB TINT | TIMECODE | HEVC 80M
+ *                           TEMP/BATT, plus the single floating slider row directly underneath
+ *   [4] rightColumn       — RIGHT (72 dp): REC circle, AE/AF LOCK, F1/F2/F3, SLATE
+ *   [5] bottomZone        — BOTTOM bar (48 dp): 64-bin histogram | PEAK ZEBRA FALSE COLOR LUT
+ *                           GUIDES EIS | stereo L/R VU meter, slider row floats above the bar
  *
- * Every pill opens a popup panel (PopupWindow, rounded dark cinema style). All chrome hides
- * with a fast vertical swipe or a double tap on the picture. TAG "M14Hud".
+ * Overlap/glitch law: there is NO PopupWindow anywhere. Tapping a parameter opens exactly ONE
+ * in-layout slider row (under the top bar for top parameters, above the bottom bar for bottom
+ * pills); every opener first closes the open panel — including one attached to the other zone —
+ * so UI elements can never stack. TAG "M14Hud".
  */
 class HudController(
     private val activity: Activity,
@@ -62,7 +63,7 @@ class HudController(
         fun onTorchToggled(on: Boolean)
         fun onFormatChanged(preset: Models.ResPreset)      // MainActivity rebuilds the session
         fun onBitrateChanged(p: Models.BitratePreset)
-        fun onFocusTap(nx: Float, ny: Float)               // normalized viewfinder coords
+        fun onFocusTap(nx: Float, ny: Float)               // normalized picture coords
         fun onMarkerTap(index: Int)                        // 0..2 short tap -> AF at marker
         fun onMarkerLongPress(index: Int)                  // save last tap point as marker
     }
@@ -92,36 +93,42 @@ class HudController(
 
     private lateinit var guidesOverlay: GuidesOverlayView
     private lateinit var focusOverlay: FocusOverlayView
+    private lateinit var topZone: LinearLayout
     private lateinit var topBar: LinearLayout
-    private lateinit var bottomContainer: LinearLayout
-    private lateinit var transportStrip: LinearLayout
+    private lateinit var topSliderRow: LinearLayout
+    private lateinit var bottomZone: LinearLayout
+    private lateinit var bottomSliderRow: LinearLayout
+    private lateinit var bottomBar: LinearLayout
+    private lateinit var rightColumn: LinearLayout
     private lateinit var histogramView: HistogramView
     private lateinit var audioMeter: AudioMeterView
     private lateinit var recButton: RecButton
+    private lateinit var lockButton: TextView
+    private lateinit var statusChip: TextView
 
-    private lateinit var formatPill: TextView
-    private lateinit var bitratePill: TextView
+    private lateinit var fpsPill: TextView
     private lateinit var shutterPill: TextView
+    private lateinit var irisPill: TextView
     private lateinit var isoPill: TextView
     private lateinit var wbPill: TextView
+    private lateinit var tintPill: TextView
     private lateinit var tcPill: TextView
-    private lateinit var statusPill: TextView
+    private lateinit var codecPill: TextView
+    private lateinit var sysPill: TextView
     private lateinit var peakPill: TextView
     private lateinit var zebraPill: TextView
     private lateinit var fcPill: TextView
     private lateinit var lutPill: TextView
     private lateinit var guidesPill: TextView
-    private lateinit var squeezePill: TextView
     private lateinit var eisPill: TextView
-    private lateinit var torchPill: TextView
-    private val markerPills = arrayOfNulls<TextView>(3)
+    private val markerButtons = arrayOfNulls<TextView>(3)
 
-    private var popup: PopupWindow? = null
-    private val panelChips = ArrayList<ChipRef>()
+    /** The one open panel id, or null. Opening a panel closes every other panel first. */
+    private var openPanelId: String? = null
     private var chromeVisible = true
     private var lastTap: FloatArray? = null
 
-    private var actionStatus = "—"
+    private var statusText = ""
     private var systemStatus = ""
     private var telemetryHint = ""
 
@@ -131,9 +138,10 @@ class HudController(
 
     init {
         buildOverlays()
-        buildTopBar()
-        buildBottomContainer()
-        buildTransportStrip()
+        buildTopZone()
+        buildRightColumn()
+        buildBottomZone()
+        buildStatusChip()
         installRootGestures()
         refreshAll()
     }
@@ -173,167 +181,186 @@ class HudController(
         focusOverlay.onVerticalSwipe = { toggleChrome() }
     }
 
-    private fun buildTopBar() {
+    // -----------------------------------------------------------------------------------------
+    // Zone 1 — TOP: 48 dp bar (FPS SHUTTER IRIS ISO WB TINT | TIMECODE | HEVC 80M | TEMP/BATT)
+    //          + the single floating slider row directly underneath
+    // -----------------------------------------------------------------------------------------
+
+    private fun buildTopZone() {
+        topZone = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
         topBar = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = barBg()
-            val pad = dp(6f)
+            val pad = dp(4f)
             setPadding(pad, pad, pad, pad)
         }
 
-        formatPill = makePill(settings.resolution.label) { panelFormat(it) }
-        bitratePill = makePill(settings.bitrate.label) { panelBitrate(it) }
-        shutterPill = makePill(settings.shutterLabel()) { panelShutter(it) }
-        isoPill = makePill(settings.isoLabel()) { panelIso(it) }
-        wbPill = makePill(settings.wbLabel()) { panelWb(it) }
+        fpsPill = makePill(settings.resolution.label) { togglePanel(PANEL_FPS) }
+        shutterPill = makePill(settings.shutterLabel()) { togglePanel(PANEL_SHUTTER) }
+        irisPill = makePill(irisLabel()) { togglePanel(PANEL_IRIS) }
+        isoPill = makePill(settings.isoLabel()) { togglePanel(PANEL_ISO) }
+        wbPill = makePill(settings.wbLabel()) { togglePanel(PANEL_WB) }
+        tintPill = makePill(tintLabel()) { togglePanel(PANEL_TINT) }
         tcPill = makePill("00:00:00:00", mono = true, sizeSp = 14f, onClick = null)
-        statusPill = makePill("—", onClick = null).apply {
-            gravity = Gravity.CENTER or Gravity.CENTER_VERTICAL
-            ellipsize = TextUtils.TruncateAt.END
-        }
+        codecPill = makePill(codecLabel()) { togglePanel(PANEL_CODEC) }
+        sysPill = makePill("—") { togglePanel(PANEL_SYS) }
 
-        topBar.addView(formatPill, pillLp())
-        topBar.addView(bitratePill, pillLp())
-        topBar.addView(shutterPill, pillLp())
-        topBar.addView(isoPill, pillLp())
-        topBar.addView(wbPill, pillLp())
-        topBar.addView(tcPill, pillLp())
+        val pillLp = topPillLp()
+        topBar.addView(fpsPill, pillLp)
+        topBar.addView(shutterPill, topPillLp())
+        topBar.addView(irisPill, topPillLp())
+        topBar.addView(isoPill, topPillLp())
+        topBar.addView(wbPill, topPillLp())
+        topBar.addView(tintPill, topPillLp())
+
+        // Centered timecode: weight-1 FrameLayout keeps TC dead-center regardless of pill widths.
+        val tcCenter = FrameLayout(activity)
+        val tcLp = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.CENTER
+        )
+        tcCenter.addView(tcPill, tcLp)
         topBar.addView(
-            statusPill,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            tcCenter,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
         )
 
-        root.addView(
+        topBar.addView(codecPill, topPillLp())
+        topBar.addView(sysPill, topPillLp())
+
+        topZone.addView(
             topBar,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48f)
             )
         )
-    }
 
-    private fun buildBottomContainer() {
-        bottomContainer = LinearLayout(activity).apply {
+        // The ONE floating slider row docked directly under the bar (CP8 overlap law).
+        topSliderRow = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
         }
-
-        // Scopes row: histogram bottom-left, audio meter bottom-right, above the toggle bar.
-        val scopesRow = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.BOTTOM
-        }
-        histogramView = HistogramView(activity)
-        val histLp = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        )
-        histLp.marginStart = dp(10f)
-        histLp.bottomMargin = dp(10f)
-        scopesRow.addView(histogramView, histLp)
-
-        scopesRow.addView(
-            Space(activity),
-            LinearLayout.LayoutParams(0, 1, 1f)
-        )
-
-        audioMeter = AudioMeterView(activity)
-        val meterLp = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        )
-        meterLp.marginEnd = dp(10f)
-        meterLp.bottomMargin = dp(10f)
-        scopesRow.addView(audioMeter, meterLp)
-
-        bottomContainer.addView(
-            scopesRow,
+        topZone.addView(
+            topSliderRow,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             )
         )
 
-        // Toggle pill bar.
-        val pillsRow = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        root.addView(
+            topZone,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP
+            )
+        )
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Zone 2 — RIGHT: 72 dp transport column (REC, AE/AF LOCK, F1/F2/F3, SLATE)
+    // -----------------------------------------------------------------------------------------
+
+    private fun buildRightColumn() {
+        rightColumn = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
             background = barBg()
-            val pad = dp(6f)
-            setPadding(pad, pad, pad, pad)
+            val pad = dp(4f)
+            setPadding(pad, dp(6f), pad, dp(6f))
         }
 
-        peakPill = makePill(activity.getString(R.string.btn_peak)) { panelPeak(it) }
-        zebraPill = makePill(activity.getString(R.string.btn_zebra)) { panelZebra(it) }
-        fcPill = makePill(activity.getString(R.string.btn_false_color)).apply {
+        recButton = RecButton(activity).apply {
+            setOnClickListener { hooks.onRecordToggle() }
+        }
+        rightColumn.addView(recButton, columnLp(dp(52f), dp(52f), 0))
+
+        lockButton = makeColumnButton(activity.getString(R.string.btn_lock)).apply {
             setOnClickListener {
-                settings.falseColorOn = !settings.falseColorOn
+                settings.aeLock = !settings.aeLock
+                onSettingsDirty?.invoke()
                 refreshAll()
             }
         }
-        lutPill = makePill(activity.getString(R.string.btn_lut)) { panelLut(it) }
-        guidesPill = makePill(activity.getString(R.string.btn_guides)) { panelGuides(it) }
-        squeezePill = makePill(activity.getString(R.string.btn_desqueeze)) { panelSqueeze(it) }
-
-        pillsRow.addView(peakPill, pillLp())
-        pillsRow.addView(zebraPill, pillLp())
-        pillsRow.addView(fcPill, pillLp())
-        pillsRow.addView(lutPill, pillLp())
-        pillsRow.addView(guidesPill, pillLp())
-        pillsRow.addView(squeezePill, pillLp())
+        rightColumn.addView(lockButton, columnLp(dp(60f), ViewGroup.LayoutParams.WRAP_CONTENT, dp(8f)))
 
         for (i in 0..2) {
-            val pill = makePill(activity.getString(markerLabelRes(i))).apply {
+            val btn = makeColumnButton(activity.getString(markerLabelRes(i))).apply {
                 setOnClickListener { hooks.onMarkerTap(i) }
                 setOnLongClickListener {
                     hooks.onMarkerLongPress(i)
                     true
                 }
             }
-            markerPills[i] = pill
-            pillsRow.addView(pill, pillLp())
+            markerButtons[i] = btn
+            rightColumn.addView(btn, columnLp(dp(44f), ViewGroup.LayoutParams.WRAP_CONTENT, dp(6f)))
         }
 
-        bottomContainer.addView(
-            pillsRow,
+        val slateBtn = makeColumnButton(activity.getString(R.string.btn_slate)).apply {
+            setOnClickListener { hooks.onSlateOpen() }
+        }
+        rightColumn.addView(slateBtn, columnLp(dp(60f), ViewGroup.LayoutParams.WRAP_CONTENT, dp(8f)))
+
+        val lp = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.END or Gravity.CENTER_VERTICAL
+        )
+        lp.marginEnd = dp(4f)
+        root.addView(rightColumn, lp)
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Zone 3 — BOTTOM: 48 dp bar (histogram | PEAK ZEBRA FC LUT GUIDES EIS | stereo VU meter)
+    //          + the floating slider row directly above the bar
+    // -----------------------------------------------------------------------------------------
+
+    private fun buildBottomZone() {
+        bottomZone = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        bottomSliderRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        bottomZone.addView(
+            bottomSliderRow,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             )
         )
 
-        root.addView(
-            bottomContainer,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM
-            )
-        )
-    }
-
-    private fun buildTransportStrip() {
-        transportStrip = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            val pad = dp(12f)
+        bottomBar = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = barBg()
+            val pad = dp(4f)
             setPadding(pad, pad, pad, pad)
         }
 
-        recButton = RecButton(activity).apply {
-            setOnClickListener { hooks.onRecordToggle() }
-        }
-        transportStrip.addView(
-            recButton,
-            verticalStripLp(dp(76f), dp(76f), 0)
-        )
+        histogramView = HistogramView(activity)
+        val histLp = LinearLayout.LayoutParams(dp(118f), dp(38f))
+        histLp.marginStart = dp(6f)
+        bottomBar.addView(histogramView, histLp)
 
-        val slateBtn = TextView(activity).apply {
-            text = activity.getString(R.string.btn_slate)
-            setTextColor(activity.getColor(R.color.hud_text_primary))
-            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
-            typeface = Typeface.DEFAULT_BOLD
+        // Center pills group, kept centered with two weight-1 springs.
+        val pillsRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            background = pillBg().apply { cornerRadius = dp(12f).toFloat() }
-            maxLines = 1
-            setOnClickListener { hooks.onSlateOpen() }
         }
-        transportStrip.addView(slateBtn, verticalStripLp(dp(56f), dp(56f), dp(14f)))
-
+        peakPill = makePill(activity.getString(R.string.btn_peak)) { togglePanel(PANEL_PEAK) }
+        zebraPill = makePill(activity.getString(R.string.btn_zebra)) { togglePanel(PANEL_ZEBRA) }
+        fcPill = makePill(activity.getString(R.string.btn_false_color)).apply {
+            setOnClickListener {
+                settings.falseColorOn = !settings.falseColorOn
+                refreshAll()
+            }
+        }
+        lutPill = makePill(activity.getString(R.string.btn_lut)) { togglePanel(PANEL_LUT) }
+        guidesPill = makePill(activity.getString(R.string.btn_guides)) { togglePanel(PANEL_GUIDES) }
         eisPill = makePill(activity.getString(R.string.btn_eis)).apply {
             setOnClickListener {
                 settings.eisOn = !settings.eisOn
@@ -341,22 +368,65 @@ class HudController(
                 hooks.onEisToggled(settings.eisOn)
             }
         }
-        torchPill = makePill(activity.getString(R.string.btn_torch)).apply {
-            setOnClickListener {
-                settings.torchOn = !settings.torchOn
-                refreshAll()
-                hooks.onTorchToggled(settings.torchOn)
-            }
-        }
-        transportStrip.addView(eisPill, verticalStripLp(dp(64f), ViewGroup.LayoutParams.WRAP_CONTENT, dp(14f)))
-        transportStrip.addView(torchPill, verticalStripLp(dp(64f), ViewGroup.LayoutParams.WRAP_CONTENT, dp(12f)))
+        pillsRow.addView(peakPill, topPillLp())
+        pillsRow.addView(zebraPill, topPillLp())
+        pillsRow.addView(fcPill, topPillLp())
+        pillsRow.addView(lutPill, topPillLp())
+        pillsRow.addView(guidesPill, topPillLp())
+        pillsRow.addView(eisPill, topPillLp())
 
+        val springLp = LinearLayout.LayoutParams(0, 1, 1f)
+        bottomBar.addView(View(activity), springLp)
+        bottomBar.addView(pillsRow, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+        bottomBar.addView(View(activity), LinearLayout.LayoutParams(0, 1, 1f))
+
+        audioMeter = AudioMeterView(activity)
+        val meterLp = LinearLayout.LayoutParams(dp(118f), dp(38f))
+        meterLp.marginEnd = dp(6f)
+        bottomBar.addView(audioMeter, meterLp)
+
+        bottomZone.addView(
+            bottomBar,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48f)
+            )
+        )
+
+        root.addView(
+            bottomZone,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+            )
+        )
+    }
+
+    /** Transient status chip (engine info lines) floating under the top zone. */
+    private fun buildStatusChip() {
+        statusChip = TextView(activity).apply {
+            text = ""
+            setTextColor(textColor())
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
+            typeface = Typeface.MONOSPACE
+            background = panelBg()
+            gravity = Gravity.CENTER
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            visibility = View.GONE
+            val padH = dp(12f)
+            val padV = dp(6f)
+            setPadding(padH, padV, padH, padV)
+        }
         val lp = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.END or Gravity.CENTER_VERTICAL
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL
         )
-        lp.marginEnd = dp(24f)
-        root.addView(transportStrip, lp)
+        lp.topMargin = dp(56f)
+        lp.marginStart = dp(180f)
+        lp.marginEnd = dp(180f)
+        root.addView(statusChip, lp)
     }
 
     private fun installRootGestures() {
@@ -388,12 +458,15 @@ class HudController(
 
     /** Re-render every pill label + active state from settings. */
     fun refreshAll() {
-        formatPill.text = settings.resolution.label
-        bitratePill.text = settings.bitrate.label
+        fpsPill.text = settings.resolution.label
         shutterPill.text = settings.shutterLabel()
+        irisPill.text = irisLabel()
         isoPill.text = settings.isoLabel()
         wbPill.text = settings.wbLabel()
+        tintPill.text = tintLabel()
+        codecPill.text = codecLabel()
 
+        setActiveBg(lockButton, settings.aeLock)
         setActiveBg(peakPill, settings.peakingMode != Models.PeakingMode.OFF)
         setActiveBg(zebraPill, settings.zebraMode != Models.ZebraMode.OFF)
         setActiveBg(fcPill, settings.falseColorOn)
@@ -402,15 +475,15 @@ class HudController(
             guidesPill,
             settings.guide != Models.GuidePreset.OFF || settings.grid != Models.GridOverlay.NONE
         )
-        setActiveBg(squeezePill, settings.desqueeze != Models.DesqueezePreset.X100)
-        for (i in 0..2) markerPills[i]?.let { setActiveBg(it, settings.focusMarkers[i] != null) }
         setActiveBg(eisPill, settings.eisOn)
-        setActiveBg(torchPill, settings.torchOn)
+        for (i in 0..2) markerButtons[i]?.let { setActiveBg(it, settings.focusMarkers[i] != null) }
 
         guidesOverlay.refresh()
         focusOverlay.refreshMarkers()
-        composeStatus()
-        syncPanelChips()
+        composeSystemPill()
+
+        // The open panel re-renders from settings (chip states can never go stale).
+        if (openPanelId != null) renderPanel(openPanelId!!)
     }
 
     /** Timecode pill; called at 10 Hz from MainActivity and on engine frame counts. */
@@ -418,11 +491,20 @@ class HudController(
         tcPill.text = Models.formatTimecode(frameIndex.coerceAtLeast(0L), fps.coerceAtLeast(1))
     }
 
-    /** Primary status text ("READY", "REC A001C001", engine info lines). */
+    /** Engine info line — transient chip under the top bar (zone law: no STATUS pill). */
     fun setStatus(text: String) {
-        actionStatus = text.uppercase(Locale.US).ifEmpty { "—" }
-        composeStatus()
+        statusText = text.uppercase(Locale.US)
+        if (statusText.isEmpty()) {
+            statusChip.visibility = View.GONE
+            return
+        }
+        statusChip.text = statusText
+        statusChip.visibility = View.VISIBLE
+        mainHandler.removeCallbacks(hideStatusChip)
+        mainHandler.postDelayed(hideStatusChip, 3000L)
     }
+
+    private val hideStatusChip = Runnable { statusChip.visibility = View.GONE }
 
     /** Tally: red dot compound drawable on the TC pill + REC button state. */
     fun setRecording(recording: Boolean, blink: Boolean) {
@@ -450,15 +532,15 @@ class HudController(
         }
         if (aeState == 4) hints.add("AE SRCH")
         telemetryHint = hints.joinToString(" ")
-        composeStatus()
+        composeSystemPill()
     }
 
     fun onSystemStatus(batteryPct: Int, tempC: Float, thermalHeadroom: Float, freeGb: Float) {
         systemStatus = String.format(
-            Locale.US, "%d%% %.0f°C TH%.1f %.1fGB",
-            batteryPct.coerceIn(0, 100), tempC, thermalHeadroom, freeGb
+            Locale.US, "%.0f°C %d%% TH%.1f %.1fGB",
+            tempC, batteryPct.coerceIn(0, 100), thermalHeadroom, freeGb
         )
-        composeStatus()
+        composeSystemPill()
     }
 
     /** Show the animated tap box at a normalized position (e.g. F-marker recall). */
@@ -481,22 +563,25 @@ class HudController(
     }
 
     fun destroy() {
-        popup?.dismiss()
-        popup = null
-        panelChips.clear()
+        closePanel()
         mainHandler.removeCallbacksAndMessages(null)
     }
 
     // -----------------------------------------------------------------------------------------
-    // Status composition
+    // Labels + status composition
     // -----------------------------------------------------------------------------------------
 
-    private fun composeStatus() {
-        val parts = ArrayList<String>(3)
-        if (actionStatus.isNotEmpty()) parts.add(actionStatus)
+    private fun irisLabel(): String = "f/1.8"
+
+    private fun tintLabel(): String = String.format(Locale.US, "TINT %+d", settings.tint)
+
+    private fun codecLabel(): String = "HEVC ${settings.bitrate.label}"
+
+    private fun composeSystemPill() {
+        val parts = ArrayList<String>(2)
         if (systemStatus.isNotEmpty()) parts.add(systemStatus)
         if (telemetryHint.isNotEmpty()) parts.add(telemetryHint)
-        statusPill.text = parts.joinToString("  ")
+        sysPill.text = if (parts.isEmpty()) "—" else parts.joinToString(" ")
     }
 
     private fun setTally(on: Boolean) {
@@ -517,7 +602,7 @@ class HudController(
         chromeVisible = !chromeVisible
         val target = if (chromeVisible) 1f else 0f
         val hide = !chromeVisible
-        for (v in listOf(topBar, bottomContainer, transportStrip)) {
+        for (v in listOf(topZone, bottomZone, rightColumn)) {
             v.animate().cancel()
             v.animate()
                 .alpha(target)
@@ -555,7 +640,7 @@ class HudController(
     private fun makePill(
         label: String,
         mono: Boolean = false,
-        sizeSp: Float = 13f,
+        sizeSp: Float = 12f,
         onClick: ((View) -> Unit)? = null
     ): TextView = TextView(activity).apply {
         text = label.uppercase(Locale.US)
@@ -563,13 +648,26 @@ class HudController(
         setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, sizeSp)
         typeface = if (mono) Typeface.MONOSPACE else Typeface.DEFAULT_BOLD
         background = pillBg()
-        val padH = dp(10f)
-        val padV = dp(6f)
+        val padH = dp(8f)
+        val padV = dp(5f)
         setPadding(padH, padV, padH, padV)
-        minWidth = dp(54f)
+        minWidth = dp(44f)
         gravity = Gravity.CENTER
         maxLines = 1
         onClick?.let { setOnClickListener(it) }
+    }
+
+    private fun makeColumnButton(label: String): TextView = TextView(activity).apply {
+        text = label.uppercase(Locale.US)
+        setTextColor(textColor())
+        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
+        typeface = Typeface.DEFAULT_BOLD
+        background = pillBg()
+        val padH = dp(6f)
+        val padV = dp(6f)
+        setPadding(padH, padV, padH, padV)
+        gravity = Gravity.CENTER
+        maxLines = 1
     }
 
     private fun setActiveBg(v: TextView, on: Boolean) {
@@ -578,17 +676,12 @@ class HudController(
         )
     }
 
-    private fun pillLp(): LinearLayout.LayoutParams =
+    private fun topPillLp(): LinearLayout.LayoutParams =
         LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { marginEnd = dp(6f) }
+        ).apply { marginEnd = dp(4f) }
 
-    private fun sectionLp(): LinearLayout.LayoutParams =
-        LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(10f) }
-
-    private fun verticalStripLp(w: Int, h: Int, topMargin: Int): LinearLayout.LayoutParams =
+    private fun columnLp(w: Int, h: Int, topMargin: Int): LinearLayout.LayoutParams =
         LinearLayout.LayoutParams(w, h).apply { this.topMargin = topMargin }
 
     private fun markerLabelRes(i: Int): Int = when (i) {
@@ -598,115 +691,172 @@ class HudController(
     }
 
     // -----------------------------------------------------------------------------------------
-    // Popup panel machinery
+    // Panel machinery (CP8 overlap law: ONE panel at a time, in-layout, never a PopupWindow)
     // -----------------------------------------------------------------------------------------
 
-    private class ChipRef(val view: TextView, val provider: () -> Boolean)
-
-    private class SliderRowRef(val row: LinearLayout, val seek: SeekBar, val readout: TextView)
+    private companion object {
+        const val PANEL_FPS = "fps"
+        const val PANEL_SHUTTER = "shutter"
+        const val PANEL_IRIS = "iris"
+        const val PANEL_ISO = "iso"
+        const val PANEL_WB = "wb"
+        const val PANEL_TINT = "tint"
+        const val PANEL_CODEC = "codec"
+        const val PANEL_SYS = "sys"
+        const val PANEL_PEAK = "peak"
+        const val PANEL_ZEBRA = "zebra"
+        const val PANEL_LUT = "lut"
+        const val PANEL_GUIDES = "guides"
+    }
 
     private class ChipItem(val label: String, val active: () -> Boolean, val onClick: () -> Unit)
 
-    private fun syncPanelChips() {
-        for (c in panelChips) setActiveBg(c.view, c.provider())
+    /** Tapping a pill opens its panel; tapping the open pill closes it. Every opener first
+     *  closes whatever panel is open (in EITHER zone) — stacking is impossible by construction. */
+    private fun togglePanel(id: String) {
+        if (openPanelId == id) {
+            closePanel()
+        } else {
+            openPanelId = id
+            renderPanel(id)
+        }
     }
 
-    private fun showPanel(anchor: View, build: LinearLayout.() -> Unit) {
-        popup?.dismiss()
-        panelChips.clear()
+    private fun closePanel() {
+        openPanelId = null
+        topSliderRow.removeAllViews()
+        topSliderRow.visibility = View.GONE
+        bottomSliderRow.removeAllViews()
+        bottomSliderRow.visibility = View.GONE
+    }
 
-        val content = LinearLayout(activity).apply {
+    /** Rebuilds the named panel into its zone's slider row (top params under the bar, bottom
+     *  pills above the bar). */
+    private fun renderPanel(id: String) {
+        topSliderRow.removeAllViews()
+        bottomSliderRow.removeAllViews()
+        topSliderRow.visibility = View.GONE
+        bottomSliderRow.visibility = View.GONE
+
+        val container = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            val pad = dp(14f)
+            background = panelBg()
+            elevation = dp(8f).toFloat()
+            val pad = dp(10f)
             setPadding(pad, pad, pad, pad)
-            build()
         }
-        val wrapper = FrameLayout(activity)
-        wrapper.addView(
-            content,
+        buildPanelContent(container, id)
+        if (container.childCount == 0) {
+            openPanelId = null
+            return
+        }
+
+        val isTop = when (id) {
+            PANEL_FPS, PANEL_SHUTTER, PANEL_IRIS, PANEL_ISO, PANEL_WB, PANEL_TINT,
+            PANEL_CODEC, PANEL_SYS -> true
+            else -> false
+        }
+        val host = if (isTop) topSliderRow else bottomSliderRow
+
+        val wrap = FrameLayout(activity)
+        wrap.addView(
+            container,
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             )
         )
-
-        val maxW = min(dp(680f), (root.width * 0.9f).toInt().coerceAtLeast(dp(280f)))
-        val pw = PopupWindow(wrapper, maxW, ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
-            setBackgroundDrawable(panelBg())
-            isOutsideTouchable = true
-            elevation = dp(10f).toFloat()
-        }
-        popup = pw
-
-        val widthSpec = View.MeasureSpec.makeMeasureSpec(maxW, View.MeasureSpec.EXACTLY)
-        val heightSpec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
-        wrapper.measure(widthSpec, heightSpec)
-
-        val loc = IntArray(2)
-        anchor.getLocationOnScreen(loc)
-        val x = (loc[0] + anchor.width / 2 - maxW / 2)
-            .coerceIn(dp(8f), (root.width - maxW - dp(8f)).coerceAtLeast(dp(8f)))
-        val y = if (loc[1] < root.height / 2) {
-            loc[1] + anchor.height + dp(6f)
-        } else {
-            (loc[1] - wrapper.measuredHeight - dp(6f)).coerceAtLeast(dp(8f))
-        }
-        pw.showAtLocation(root, Gravity.NO_GRAVITY, x, y)
-    }
-
-    /** Section caption inside a panel. */
-    private fun LinearLayout.title(text: String) {
-        val t = TextView(activity).apply {
-            this.text = text.uppercase(Locale.US)
-            setTextColor(dimColor())
-            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
-            typeface = Typeface.DEFAULT_BOLD
-            letterSpacing = 0.12f
-        }
         val lp = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         )
-        lp.topMargin = dp(2f)
-        lp.bottomMargin = dp(6f)
-        addView(t, lp)
+        lp.topMargin = dp(4f)
+        lp.marginStart = dp(8f)
+        lp.marginEnd = dp(84f)
+        lp.bottomMargin = dp(4f)
+        host.addView(wrap, lp)
+        host.visibility = View.VISIBLE
     }
+
+    private fun buildPanelContent(container: LinearLayout, id: String) {
+        when (id) {
+            PANEL_FPS -> panelFps(container)
+            PANEL_SHUTTER -> panelShutter(container)
+            PANEL_IRIS -> panelIris(container)
+            PANEL_ISO -> panelIso(container)
+            PANEL_WB -> panelWb(container)
+            PANEL_TINT -> panelTint(container)
+            PANEL_CODEC -> panelCodec(container)
+            PANEL_SYS -> panelSys(container)
+            PANEL_PEAK -> panelPeak(container)
+            PANEL_ZEBRA -> panelZebra(container)
+            PANEL_LUT -> panelLut(container)
+            PANEL_GUIDES -> panelGuides(container)
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Panel widgets
+    // -----------------------------------------------------------------------------------------
 
     private fun makeChip(item: ChipItem): TextView = TextView(activity).apply {
         text = item.label
         setTextColor(textColor())
-        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
+        setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
         typeface = Typeface.DEFAULT_BOLD
         background = pillBg()
-        val padH = dp(12f)
-        val padV = dp(8f)
+        val padH = dp(10f)
+        val padV = dp(6f)
         setPadding(padH, padV, padH, padV)
         gravity = Gravity.CENTER
         maxLines = 1
-        minWidth = dp(48f)
+        minWidth = dp(40f)
         setActiveBg(this, item.active())
         setOnClickListener {
             item.onClick()
-            syncPanelChips()
+            refreshAll()
         }
     }
 
-    /** Horizontally scrollable chip group (member extension on the panel content). */
-    private fun LinearLayout.chipGroup(items: List<ChipItem>) {
+    private fun LinearLayout.chipRow(items: List<ChipItem>): HorizontalScrollView {
         val scroll = HorizontalScrollView(activity).apply {
             isHorizontalScrollBarEnabled = false
             clipToPadding = false
         }
         val row = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-        for (item in items) row.addView(makeChip(item), chipLp())
+        for (item in items) {
+            row.addView(
+                makeChip(item),
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dp(6f) }
+            )
+        }
         scroll.addView(row)
-        addView(scroll, sectionLp())
+        addView(
+            scroll,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(8f) }
+        )
+        return scroll
     }
 
-    private fun chipLp(): LinearLayout.LayoutParams =
-        LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { marginEnd = dp(8f) }
+    private fun LinearLayout.caption(text: String): TextView {
+        val t = TextView(activity).apply {
+            this.text = text.uppercase(Locale.US)
+            setTextColor(dimColor())
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 10f)
+            typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.12f
+        }
+        addView(
+            t,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(4f) }
+        )
+        return t
+    }
 
-    /** Labelled seek row with live readout; integer domain [minVal, maxVal] with [step]. */
     private fun LinearLayout.slider(
         label: String,
         minVal: Int,
@@ -715,7 +865,7 @@ class HudController(
         initVal: Int,
         format: (Int) -> String,
         onValue: (Int) -> Unit
-    ): SliderRowRef {
+    ) {
         val row = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -726,14 +876,14 @@ class HudController(
             setTextColor(dimColor())
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
             typeface = Typeface.DEFAULT_BOLD
-            width = dp(64f)
+            width = dp(56f)
             maxLines = 1
         }
         row.addView(lbl)
 
         val seek = SeekBar(activity).apply {
             max = ((maxVal - minVal) / step.coerceAtLeast(1)).coerceAtLeast(1)
-            progress = ((initVal - minVal) / step.coerceAtLeast(1)).coerceIn(0, max)
+            progress = (((initVal - minVal) / step.coerceAtLeast(1)).coerceIn(0, max))
             progressTintList = ColorStateList.valueOf(accentColor())
             thumbTintList = ColorStateList.valueOf(accentColor())
         }
@@ -741,12 +891,11 @@ class HudController(
             setTextColor(textColor())
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = Typeface.MONOSPACE
-            width = dp(112f)
+            width = dp(104f)
             gravity = Gravity.END or Gravity.CENTER_VERTICAL
             maxLines = 1
         }
-        val initV = (minVal + seek.progress * step).coerceIn(minVal, maxVal)
-        readout.text = format(initV)
+        readout.text = format((minVal + seek.progress * step).coerceIn(minVal, maxVal))
 
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -761,95 +910,110 @@ class HudController(
 
         row.addView(seek, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         row.addView(readout)
-        addView(row, sectionLp())
-        return SliderRowRef(row, seek, readout)
+        addView(
+            row,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+    }
+
+    private fun LinearLayout.infoLine(text: String): TextView {
+        val t = TextView(activity).apply {
+            this.text = text
+            setTextColor(dimColor())
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
+            typeface = Typeface.MONOSPACE
+            maxLines = 1
+        }
+        addView(
+            t,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+        return t
     }
 
     private fun exposureReadout(): String {
         val eff = settings.effectiveExposureNs()
-        return String.format(Locale.US, "≈ %.2f ms  (%.0f µs)", eff / 1_000_000.0, eff / 1_000.0)
+        return String.format(Locale.US, "= %.2f ms  (%.0f us)", eff / 1_000_000.0, eff / 1_000.0)
     }
 
     // -----------------------------------------------------------------------------------------
     // Panels
     // -----------------------------------------------------------------------------------------
 
-    private fun panelFormat(anchor: View) = showPanel(anchor) {
-        title("Recording format")
-        chipGroup(
+    private fun panelFps(c: LinearLayout) {
+        c.caption("Frame rate / format")
+        c.chipRow(
             Models.ResPreset.entries.map { p ->
                 ChipItem(p.label, { settings.resolution == p }, {
                     settings.resolution = p
                     refreshAll()
                     hooks.onFormatChanged(p)
-                    popup?.dismiss()
+                    closePanel()
                 })
             }
         )
     }
 
-    private fun panelBitrate(anchor: View) = showPanel(anchor) {
-        title("Bitrate")
-        chipGroup(
+    private fun panelCodec(c: LinearLayout) {
+        c.caption("Codec / bitrate (rebuilds the encoder)")
+        c.infoLine("c2.exynos.hevc.encoder — HEVC Main, BT.709 SDR, CFR")
+        c.chipRow(
             Models.BitratePreset.entries.map { p ->
                 ChipItem(p.label, { settings.bitrate == p }, {
                     settings.bitrate = p
                     refreshAll()
                     hooks.onBitrateChanged(p)
-                    popup?.dismiss()
+                    closePanel()
                 })
             }
         )
     }
 
-    private fun panelShutter(anchor: View) = showPanel(anchor) {
-        title("Shutter")
-        val angleBox = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        val speedBox = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+    private fun panelShutter(c: LinearLayout) {
+        c.caption("Shutter — angle / speed (angle is the invariant)")
+        var angleBox: LinearLayout? = null
+        var speedBox: LinearLayout? = null
         val readout = TextView(activity).apply {
             setTextColor(accentColor())
-            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = Typeface.MONOSPACE
             gravity = Gravity.END
         }
-        var modeBtn: TextView? = null
 
         fun syncMode() {
             val angleMode = settings.shutterMode == Models.ShutterMode.ANGLE
-            modeBtn?.text = if (angleMode) {
-                "MODE: ANGLE °  ⇄  SPEED 1/x"
-            } else {
-                "MODE: SPEED 1/x  ⇄  ANGLE °"
-            }
-            angleBox.visibility = if (angleMode) View.VISIBLE else View.GONE
-            speedBox.visibility = if (angleMode) View.GONE else View.VISIBLE
+            angleBox?.visibility = if (angleMode) View.VISIBLE else View.GONE
+            speedBox?.visibility = if (angleMode) View.GONE else View.VISIBLE
             readout.text = exposureReadout()
         }
 
-        val btn = TextView(activity).apply {
-            setTextColor(textColor())
-            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
-            typeface = Typeface.DEFAULT_BOLD
-            background = pillBg()
-            val padH = dp(12f)
-            val padV = dp(8f)
-            setPadding(padH, padV, padH, padV)
-            gravity = Gravity.CENTER
-            setOnClickListener {
-                settings.shutterMode = if (settings.shutterMode == Models.ShutterMode.ANGLE) {
-                    Models.ShutterMode.SPEED
-                } else {
-                    Models.ShutterMode.ANGLE
-                }
-                syncMode()
-                onSettingsDirty?.invoke()
-                refreshAll()
-            }
-        }
-        modeBtn = btn
+        val angle = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        val speed = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        angleBox = angle
+        speedBox = speed
 
-        // Angle mode: preset chips + continuous angle slider.
-        angleBox.chipGroup(
+        c.chipRow(
+            listOf(
+                ChipItem("ANGLE", { settings.shutterMode == Models.ShutterMode.ANGLE }, {
+                    settings.shutterMode = Models.ShutterMode.ANGLE
+                    onSettingsDirty?.invoke()
+                    refreshAll()
+                    syncMode()
+                }),
+                ChipItem("SPEED", { settings.shutterMode == Models.ShutterMode.SPEED }, {
+                    settings.shutterMode = Models.ShutterMode.SPEED
+                    onSettingsDirty?.invoke()
+                    refreshAll()
+                    syncMode()
+                })
+            )
+        )
+
+        angle.chipRow(
             Models.shutterAnglePresets().map { a ->
                 val label = if (a % 1f == 0f) "${a.toInt()}°" else "${a}°"
                 ChipItem(label, {
@@ -863,7 +1027,7 @@ class HudController(
                 })
             }
         )
-        angleBox.slider(
+        angle.slider(
             "Angle", 45, 360, 1, settings.shutterAngleDeg.roundToInt(),
             { "$it°" },
             { v ->
@@ -874,8 +1038,7 @@ class HudController(
             }
         )
 
-        // Speed mode: 1/x denominator chips.
-        speedBox.chipGroup(
+        speed.chipRow(
             Models.shutterSpeedDenominators().map { d ->
                 ChipItem("1/$d", {
                     settings.shutterMode == Models.ShutterMode.SPEED &&
@@ -889,41 +1052,53 @@ class HudController(
             }
         )
 
-        addView(btn, sectionLp())
-        addView(angleBox, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
-        addView(speedBox, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
-        addView(readout, sectionLp())
+        c.addView(
+            angle,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+        c.addView(
+            speed,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+        c.addView(readout)
         syncMode()
     }
 
-    private fun panelIso(anchor: View) = showPanel(anchor) {
-        title("Exposure — ISO / EV")
-        var isoRow: SliderRowRef? = null
-        var evRow: SliderRowRef? = null
-
-        fun syncVis() {
-            val manual = settings.manualExposure
-            isoRow?.row?.visibility = if (manual) View.VISIBLE else View.GONE
-            evRow?.row?.visibility = if (manual) View.GONE else View.VISIBLE
+    private fun panelIris(c: LinearLayout) {
+        c.caption("Iris / exposure")
+        c.infoLine("Fixed aperture f/1.8 — S5KJN1 50MP (M14 hardware law)")
+        if (settings.manualExposure) {
+            c.infoLine("EV is locked while manual exposure drives shutter + ISO")
+        } else {
+            c.slider(
+                "EV", (Models.EV_MIN * 10).roundToInt(), (Models.EV_MAX * 10).roundToInt(), 1,
+                (settings.evCompensation * 10).roundToInt(),
+                { String.format(Locale.US, "%+.1f EV", it / 10f) },
+                { v ->
+                    settings.evCompensation = v / 10f
+                    onSettingsDirty?.invoke()
+                }
+            )
         }
+    }
 
-        chipGroup(
+    private fun panelIso(c: LinearLayout) {
+        c.caption("ISO (manual steals the sensor: AE OFF + direct injection)")
+        c.chipRow(
             listOf(
                 ChipItem("AUTO", { !settings.manualExposure }, {
                     settings.manualExposure = false
                     onSettingsDirty?.invoke()
                     refreshAll()
-                    syncVis()
                 }),
                 ChipItem("MANUAL", { settings.manualExposure }, {
                     settings.manualExposure = true
                     onSettingsDirty?.invoke()
                     refreshAll()
-                    syncVis()
                 }),
                 ChipItem("AE LOCK", { settings.aeLock }, {
                     settings.aeLock = !settings.aeLock
@@ -932,80 +1107,42 @@ class HudController(
                 })
             )
         )
-
-        isoRow = slider(
-            "ISO", Models.ISO_MIN, Models.ISO_MAX, 100, settings.iso,
-            { "ISO $it" },
-            { v ->
-                settings.iso = v
-                onSettingsDirty?.invoke()
-                refreshAll()
-            }
-        )
-
-        evRow = slider(
-            "EV", (Models.EV_MIN * 10).roundToInt(), (Models.EV_MAX * 10).roundToInt(), 1,
-            (settings.evCompensation * 10).roundToInt(),
-            { String.format(Locale.US, "%+.1f EV", it / 10f) },
-            { v ->
-                settings.evCompensation = v / 10f
-                onSettingsDirty?.invoke()
-                refreshAll()
-            }
-        )
-
-        syncVis()
+        if (settings.manualExposure) {
+            c.slider(
+                "ISO", Models.ISO_MIN, Models.ISO_MAX, 100, settings.iso,
+                { "ISO $it" },
+                { v ->
+                    settings.iso = v
+                    onSettingsDirty?.invoke()
+                }
+            )
+        }
     }
 
-    private fun panelWb(anchor: View) = showPanel(anchor) {
-        title("White balance")
-        var kelvinRow: SliderRowRef? = null
-        var tintRow: SliderRowRef? = null
-
-        fun syncVis() {
-            val kelvin = settings.wbPreset == Models.WbPreset.KELVIN
-            kelvinRow?.row?.visibility = if (kelvin) View.VISIBLE else View.GONE
-            tintRow?.row?.visibility = if (kelvin) View.VISIBLE else View.GONE
-        }
-
-        chipGroup(
+    private fun panelWb(c: LinearLayout) {
+        c.caption("White balance")
+        c.chipRow(
             Models.WbPreset.entries.map { p ->
                 ChipItem(wbChipLabel(p), { settings.wbPreset == p }, {
                     settings.wbPreset = p
                     onSettingsDirty?.invoke()
                     refreshAll()
-                    syncVis()
                 })
             }
         )
-
-        kelvinRow = slider(
-            "Kelvin", Models.KELVIN_MIN, Models.KELVIN_MAX, 50, settings.kelvin,
-            { "$it K" },
-            { v ->
-                settings.kelvin = v
-                if (settings.wbPreset != Models.WbPreset.KELVIN) {
+        if (settings.wbPreset == Models.WbPreset.KELVIN) {
+            c.slider(
+                "Kelvin", Models.KELVIN_MIN, Models.KELVIN_MAX, 50, settings.kelvin,
+                { "$it K" },
+                { v ->
+                    settings.kelvin = v
                     settings.wbPreset = Models.WbPreset.KELVIN
+                    onSettingsDirty?.invoke()
+                    refreshAll()
                 }
-                onSettingsDirty?.invoke()
-                refreshAll()
-            }
-        )
-
-        tintRow = slider(
-            "Tint", Models.TINT_MIN, Models.TINT_MAX, 1, settings.tint,
-            { String.format(Locale.US, "%+d", it) },
-            { v ->
-                settings.tint = v
-                if (settings.wbPreset != Models.WbPreset.KELVIN) {
-                    settings.wbPreset = Models.WbPreset.KELVIN
-                }
-                onSettingsDirty?.invoke()
-                refreshAll()
-            }
-        )
-
-        chipGroup(
+            )
+        }
+        c.chipRow(
             listOf(
                 ChipItem("AWB LOCK", { settings.awbLock }, {
                     settings.awbLock = !settings.awbLock
@@ -1014,8 +1151,6 @@ class HudController(
                 })
             )
         )
-
-        syncVis()
     }
 
     private fun wbChipLabel(p: Models.WbPreset): String = when (p) {
@@ -1027,9 +1162,44 @@ class HudController(
         Models.WbPreset.KELVIN -> "KELVIN"
     }
 
-    private fun panelPeak(anchor: View) = showPanel(anchor) {
-        title("Focus peaking")
-        chipGroup(
+    private fun panelTint(c: LinearLayout) {
+        c.caption("Tint (CC shift, applied with manual Kelvin)")
+        c.slider(
+            "Tint", Models.TINT_MIN, Models.TINT_MAX, 1, settings.tint,
+            { String.format(Locale.US, "%+d", it) },
+            { v ->
+                settings.tint = v
+                if (settings.wbPreset != Models.WbPreset.KELVIN) {
+                    settings.wbPreset = Models.WbPreset.KELVIN
+                }
+                onSettingsDirty?.invoke()
+                refreshAll()
+            }
+        )
+    }
+
+    private fun panelSys(c: LinearLayout) {
+        c.caption("System")
+        c.infoLine(sysPill.text.toString().ifEmpty { "— " })
+        c.chipRow(
+            listOf(
+                ChipItem("EIS", { settings.eisOn }, {
+                    settings.eisOn = !settings.eisOn
+                    refreshAll()
+                    hooks.onEisToggled(settings.eisOn)
+                }),
+                ChipItem("TORCH", { settings.torchOn }, {
+                    settings.torchOn = !settings.torchOn
+                    refreshAll()
+                    hooks.onTorchToggled(settings.torchOn)
+                })
+            )
+        )
+    }
+
+    private fun panelPeak(c: LinearLayout) {
+        c.caption("Focus peaking — 5x5 Laplacian (Blackmagic kernel)")
+        c.chipRow(
             Models.PeakingMode.entries.map { m ->
                 ChipItem(peakModeLabel(m), { settings.peakingMode == m }, {
                     settings.peakingMode = m
@@ -1037,15 +1207,15 @@ class HudController(
                 })
             }
         )
-        chipGroup(
-            Models.PeakingColor.entries.map { c ->
-                ChipItem(c.name, { settings.peakingColor == c }, {
-                    settings.peakingColor = c
+        c.chipRow(
+            Models.PeakingColor.entries.map { k ->
+                ChipItem(k.name, { settings.peakingColor == k }, {
+                    settings.peakingColor = k
                     refreshAll()
                 })
             }
         )
-        slider(
+        c.slider(
             "Strength", 0, 100, 1, (settings.peakingStrength * 100f).roundToInt(),
             { String.format(Locale.US, "%.2f", it / 100f) },
             { v ->
@@ -1061,17 +1231,9 @@ class HudController(
         Models.PeakingMode.PEAK -> "PEAK"
     }
 
-    private fun panelZebra(anchor: View) = showPanel(anchor) {
-        title("Zebras")
-        var thresholdRow: SliderRowRef? = null
-
-        fun syncVis() {
-            val z = settings.zebraMode
-            thresholdRow?.row?.visibility =
-                if (z == Models.ZebraMode.Z95 || z == Models.ZebraMode.Z90) View.VISIBLE else View.GONE
-        }
-
-        chipGroup(
+    private fun panelZebra(c: LinearLayout) {
+        c.caption("Zebras — diagonal marching stripes, mid-grey bands")
+        c.chipRow(
             listOf(
                 ChipItem("OFF", { settings.zebraMode == Models.ZebraMode.OFF }, {
                     settings.zebraMode = Models.ZebraMode.OFF
@@ -1080,61 +1242,48 @@ class HudController(
                 ChipItem("95%", { settings.zebraMode == Models.ZebraMode.Z95 }, {
                     settings.zebraMode = Models.ZebraMode.Z95
                     refreshAll()
-                    syncVis()
                 }),
                 ChipItem("90%", { settings.zebraMode == Models.ZebraMode.Z90 }, {
                     settings.zebraMode = Models.ZebraMode.Z90
                     refreshAll()
-                    syncVis()
                 }),
                 ChipItem("MID-GREY", { settings.zebraMode == Models.ZebraMode.MID_GREY }, {
                     settings.zebraMode = Models.ZebraMode.MID_GREY
                     refreshAll()
-                    syncVis()
                 }),
                 ChipItem("MG+1", { settings.zebraMode == Models.ZebraMode.MID_GREY_PLUS1 }, {
                     settings.zebraMode = Models.ZebraMode.MID_GREY_PLUS1
                     refreshAll()
-                    syncVis()
                 })
             )
         )
-
-        thresholdRow = slider(
-            "Thresh", 75, 100, 1, (settings.zebraThresholdUi * 100f).roundToInt(),
-            { v ->
-                String.format(
-                    Locale.US, "%.2f → %.2f",
-                    v / 100f, v / 100f * Models.ZEBRA_THRESHOLD_SCALE_709
-                )
-            },
-            { v -> settings.zebraThresholdUi = v / 100f }
-        )
-
-        syncVis()
+        if (settings.zebraMode == Models.ZebraMode.Z95 || settings.zebraMode == Models.ZebraMode.Z90) {
+            c.slider(
+                "Thresh", 75, 100, 1, (settings.zebraThresholdUi * 100f).roundToInt(),
+                { v ->
+                    String.format(
+                        Locale.US, "%.2f -> %.2f",
+                        v / 100f, v / 100f * Models.ZEBRA_THRESHOLD_SCALE_709
+                    )
+                },
+                { v -> settings.zebraThresholdUi = v / 100f }
+            )
+        }
     }
 
-    private fun panelLut(anchor: View) = showPanel(anchor) {
-        title("Look — 3D LUT")
-        chipGroup(
+    private fun panelLut(c: LinearLayout) {
+        c.caption("Look — 33^3 film-emulation 3D LUT")
+        c.chipRow(
             listOf(
-                ChipItem("OFF", { settings.lutPreset == Models.LutPreset.OFF }, {
-                    selectLut(Models.LutPreset.OFF)
-                }),
-                ChipItem("NEUTRAL", { settings.lutPreset == Models.LutPreset.NEUTRAL_709 }, {
-                    selectLut(Models.LutPreset.NEUTRAL_709)
-                }),
-                ChipItem("TEAL-ORG", { settings.lutPreset == Models.LutPreset.TEAL_ORANGE }, {
-                    selectLut(Models.LutPreset.TEAL_ORANGE)
-                }),
-                ChipItem("WARM", { settings.lutPreset == Models.LutPreset.WARM_FADE }, {
-                    selectLut(Models.LutPreset.WARM_FADE)
-                }),
-                ChipItem("MONO", { settings.lutPreset == Models.LutPreset.MONO_CONTRAST }, {
-                    selectLut(Models.LutPreset.MONO_CONTRAST)
-                }),
+                ChipItem("OFF", { settings.lutPreset == Models.LutPreset.OFF }, { selectLut(Models.LutPreset.OFF) }),
+                ChipItem("709 SOFT", { settings.lutPreset == Models.LutPreset.NEUTRAL_709 }, { selectLut(Models.LutPreset.NEUTRAL_709) }),
+                ChipItem("TEAL-ORG", { settings.lutPreset == Models.LutPreset.TEAL_ORANGE }, { selectLut(Models.LutPreset.TEAL_ORANGE) }),
+                ChipItem("KODAK 2383", { settings.lutPreset == Models.LutPreset.KODAK_2383 }, { selectLut(Models.LutPreset.KODAK_2383) }),
+                ChipItem("ETERNA", { settings.lutPreset == Models.LutPreset.ETERNA }, { selectLut(Models.LutPreset.ETERNA) }),
+                ChipItem("WARM FADE", { settings.lutPreset == Models.LutPreset.WARM_FADE }, { selectLut(Models.LutPreset.WARM_FADE) }),
+                ChipItem("PAN B&W", { settings.lutPreset == Models.LutPreset.MONO_CONTRAST }, { selectLut(Models.LutPreset.MONO_CONTRAST) }),
                 ChipItem("IMPORT", { settings.lutPreset == Models.LutPreset.IMPORTED }, {
-                    popup?.dismiss()
+                    closePanel()
                     val requester = lutImportRequester
                     if (requester != null) {
                         requester()
@@ -1151,12 +1300,11 @@ class HudController(
         val path = if (p == Models.LutPreset.IMPORTED) settings.importedLutPath else null
         lutApplier?.invoke(p, path)
         refreshAll()
-        popup?.dismiss()
     }
 
-    private fun panelGuides(anchor: View) = showPanel(anchor) {
-        title("Aspect guide")
-        chipGroup(
+    private fun panelGuides(c: LinearLayout) {
+        c.caption("Aspect guide")
+        c.chipRow(
             Models.GuidePreset.entries.map { g ->
                 ChipItem(g.label, { settings.guide == g }, {
                     settings.guide = g
@@ -1164,8 +1312,8 @@ class HudController(
                 })
             }
         )
-        title("Grid")
-        chipGroup(
+        c.caption("Grid")
+        c.chipRow(
             listOf(
                 ChipItem("NONE", { settings.grid == Models.GridOverlay.NONE }, {
                     settings.grid = Models.GridOverlay.NONE
@@ -1185,16 +1333,12 @@ class HudController(
                 })
             )
         )
-    }
-
-    private fun panelSqueeze(anchor: View) = showPanel(anchor) {
-        title("Anamorphic de-squeeze")
-        chipGroup(
+        c.caption("Anamorphic de-squeeze")
+        c.chipRow(
             Models.DesqueezePreset.entries.map { d ->
                 ChipItem(d.label, { settings.desqueeze == d }, {
                     settings.desqueeze = d
                     refreshAll()
-                    popup?.dismiss()
                 })
             }
         )

@@ -69,11 +69,23 @@ class GuidesOverlayView(context: Context, private val settings: SettingsStore) :
         val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
 
+        // CP1 law: overlays draw inside the 16:9 picture rect (the GL letterbox), not the full
+        // window — mask bars/grids/de-squeeze annotation align with the live picture exactly.
+        val pic = Models.pictureRect(width, height)
+        val picLeft = pic[0]
+        val picTop = pic[1]
+        val picW = pic[2]
+        val picH = pic[3]
+
         val guide = settings.guide
         var frame: RectF? = null
 
         if (guide != Models.GuidePreset.OFF) {
-            frame = fitRatio(w, h, guide.ratio)
+            val inner = fitRatio(picW, picH, guide.ratio)
+            frame = RectF(
+                picLeft + inner.left, picTop + inner.top,
+                picLeft + inner.right, picTop + inner.bottom
+            )
             drawMask(canvas, w, h, frame)
             canvas.drawRect(frame, framePaint)
             canvas.drawText(guide.label, frame.centerX() - textPaint.measureText(guide.label) / 2f,
@@ -81,15 +93,18 @@ class GuidesOverlayView(context: Context, private val settings: SettingsStore) :
         }
 
         when (settings.grid) {
-            Models.GridOverlay.THIRDS -> drawThirds(canvas, frame ?: RectF(0f, 0f, w, h))
-            Models.GridOverlay.CROSSHAIR -> drawCrosshair(canvas, w, h)
-            Models.GridOverlay.HORIZON -> drawHorizon(canvas, w, h)
+            Models.GridOverlay.THIRDS -> drawThirds(
+                canvas,
+                frame ?: RectF(picLeft, picTop, picLeft + picW, picTop + picH)
+            )
+            Models.GridOverlay.CROSSHAIR -> drawCrosshair(canvas, picLeft, picTop, picW, picH)
+            Models.GridOverlay.HORIZON -> drawHorizon(canvas, picLeft, picTop, picW, picH)
             Models.GridOverlay.NONE -> Unit
         }
 
         val dz = settings.desqueeze
         if (dz != Models.DesqueezePreset.X100) {
-            drawDesqueeze(canvas, w, h, dz, guide)
+            drawDesqueeze(canvas, picLeft, picTop, picW, picH, dz, guide)
         }
     }
 
@@ -126,9 +141,9 @@ class GuidesOverlayView(context: Context, private val settings: SettingsStore) :
         }
     }
 
-    private fun drawCrosshair(canvas: Canvas, w: Float, h: Float) {
-        val cx = w / 2f
-        val cy = h / 2f
+    private fun drawCrosshair(canvas: Canvas, left: Float, top: Float, w: Float, h: Float) {
+        val cx = left + w / 2f
+        val cy = top + h / 2f
         val len = 22f * resources.displayMetrics.density
         val gap = 6f * resources.displayMetrics.density
         canvas.drawLine(cx - len - gap, cy, cx - gap, cy, linePaint)
@@ -138,16 +153,18 @@ class GuidesOverlayView(context: Context, private val settings: SettingsStore) :
         canvas.drawPoint(cx, cy, accentPaint)
     }
 
-    private fun drawHorizon(canvas: Canvas, w: Float, h: Float) {
-        val cy = h / 2f
-        canvas.drawLine(0f, cy, w, cy, linePaint)
+    private fun drawHorizon(canvas: Canvas, left: Float, top: Float, w: Float, h: Float) {
+        val cy = top + h / 2f
+        canvas.drawLine(left, cy, left + w, cy, linePaint)
         val tick = 10f * resources.displayMetrics.density
-        canvas.drawLine(0f, cy - tick, 0f, cy + tick, accentPaint)
-        canvas.drawLine(w, cy - tick, w, cy + tick, accentPaint)
+        canvas.drawLine(left, cy - tick, left, cy + tick, accentPaint)
+        canvas.drawLine(left + w, cy - tick, left + w, cy + tick, accentPaint)
     }
 
     private fun drawDesqueeze(
         canvas: Canvas,
+        left: Float,
+        top: Float,
         w: Float,
         h: Float,
         dz: Models.DesqueezePreset,
@@ -157,21 +174,21 @@ class GuidesOverlayView(context: Context, private val settings: SettingsStore) :
         val finalRatio = (w / h) * dz.factor
         val label = String.format(Locale.US, "%s -> %.2f:1", dz.label, finalRatio)
         val tw = textPaint.measureText(label)
-        val baseline = h - 12f * d
+        val baseline = top + h - 12f * d
 
         if (guide == Models.GuidePreset.OFF) {
-            // Corner ticks so the operator sees the de-squeeze frame is armed.
+            // Corner ticks so the operator sees the de-squeeze frame is armed (picture corners).
             val tick = 16f * d
             val inset = 8f * d
             val corners = floatArrayOf(
-                inset, inset, inset + tick, inset,                                    // TL h
-                inset, inset, inset, inset + tick,                                    // TL v
-                w - inset - tick, inset, w - inset, inset,                            // TR h
-                w - inset, inset, w - inset, inset + tick,                            // TR v
-                inset, h - inset, inset + tick, h - inset,                            // BL h
-                inset, h - inset - tick, inset, h - inset,                            // BL v
-                w - inset - tick, h - inset, w - inset, h - inset,                    // BR h
-                w - inset, h - inset - tick, w - inset, h - inset                     // BR v
+                left + inset, top + inset, left + inset + tick, top + inset,                          // TL h
+                left + inset, top + inset, left + inset, top + inset + tick,                          // TL v
+                left + w - inset - tick, top + inset, left + w - inset, top + inset,                  // TR h
+                left + w - inset, top + inset, left + w - inset, top + inset + tick,                  // TR v
+                left + inset, top + h - inset, left + inset + tick, top + h - inset,                  // BL h
+                left + inset, top + h - inset - tick, left + inset, top + h - inset,                  // BL v
+                left + w - inset - tick, top + h - inset, left + w - inset, top + h - inset,          // BR h
+                left + w - inset, top + h - inset - tick, left + w - inset, top + h - inset           // BR v
             )
             var i = 0
             while (i < corners.size) {
@@ -180,8 +197,8 @@ class GuidesOverlayView(context: Context, private val settings: SettingsStore) :
             }
         }
 
-        tmpRect.set(w / 2f - tw / 2f - 6f * d, baseline - textPaint.textSize - 4f * d,
-            w / 2f + tw / 2f + 6f * d, baseline + 4f * d)
+        tmpRect.set(left + w / 2f - tw / 2f - 6f * d, baseline - textPaint.textSize - 4f * d,
+            left + w / 2f + tw / 2f + 6f * d, baseline + 4f * d)
         canvas.drawText(label, tmpRect.centerX() - tw / 2f, baseline, textPaint)
     }
 }
