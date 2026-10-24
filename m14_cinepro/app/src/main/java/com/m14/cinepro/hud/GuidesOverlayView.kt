@@ -16,11 +16,12 @@ import java.util.Locale
  * Renders (all driven straight from [SettingsStore] at draw time):
  *  - Aspect mask bars for [Models.GuidePreset] (cinema letterboxing, 2.39 / 2.00 / 1.85 / 4:3 / 9:16).
  *  - Grid overlays per [Models.GridOverlay]: THIRDS / CROSSHAIR / HORIZON.
- *  - De-squeeze readout per [Models.DesqueezePreset]: with the GL preview horizontally
- *    stretched by the anamorphic factor (stage4_shaders.md §9, matrix.setScale(f, 1.0f)),
- *    the full frame already represents the projected aspect — the overlay annotates it with
- *    the effective delivery ratio and, when no aspect guide is active, draws subtle corner
- *    ticks so the operator can see de-squeeze is armed.
+ *  - De-squeeze readout per [Models.DesqueezePreset]: the GL preview now REALLY stretches
+ *    horizontally by the anamorphic factor (stage4_shaders.md §9; V2 only drew this badge —
+ *    the GL texture was never scaled). The picture rect below is widened by the same factor,
+ *    so the full frame already represents the projected aspect — the overlay annotates it
+ *    with the effective delivery ratio and, when no aspect guide is active, draws subtle
+ *    corner ticks so the operator can see de-squeeze is armed.
  */
 class GuidesOverlayView(context: Context, private val settings: SettingsStore) : View(context) {
 
@@ -71,7 +72,8 @@ class GuidesOverlayView(context: Context, private val settings: SettingsStore) :
 
         // CP1 law: overlays draw inside the 16:9 picture rect (the GL letterbox), not the full
         // window — mask bars/grids/de-squeeze annotation align with the live picture exactly.
-        val pic = Models.pictureRect(width, height)
+        // QA Phase 6: the rect is widened by the de-squeeze factor, matching the GL viewport.
+        val pic = Models.pictureRect(width, height, settings.desqueeze.factor)
         val picLeft = pic[0]
         val picTop = pic[1]
         val picW = pic[2]

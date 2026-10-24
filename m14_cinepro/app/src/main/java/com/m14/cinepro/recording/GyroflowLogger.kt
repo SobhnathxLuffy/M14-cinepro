@@ -249,12 +249,16 @@ class GyroflowLogger(private val context: Context) {
             writerBroken = true
             errorListener?.invoke("gyro", e)
         }
-        try { moviesWriter?.close() } catch (ignore: IOException) { }
+        try { moviesWriter?.close() } catch (e: IOException) {
+            Log.w("M14_CINEPRO", "gyro writer close failed", e)
+        }
         moviesWriter = null
     }
 
     private fun disableDcim(e: IOException) {
-        try { dcimWriter?.close() } catch (ignore: IOException) { }
+        try { dcimWriter?.close() } catch (e: IOException) {
+            Log.w("M14_CINEPRO", "gyro writer close failed", e)
+        }
         dcimWriter = null
     }
 

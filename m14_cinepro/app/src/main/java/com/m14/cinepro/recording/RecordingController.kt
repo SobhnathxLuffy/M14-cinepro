@@ -255,8 +255,8 @@ class RecordingController(
         fmt.setFloat(MediaFormat.KEY_I_FRAME_INTERVAL, 1.0f)
         fmt.setInteger(MediaFormat.KEY_FRAME_RATE, fps)
         if (highSpeed) {
-            // 720p60 high-speed session: HAL outputs 60.06 fps real-time (M14_VERIFIED_TRUTH §4C),
-            // so capture-rate == fps keeps playback real-time.
+            // QA Phase 3 law: the HS HAL captures at 120 fps physical (Range(120,120)) while the
+            // MP4 is stamped at fps (= 60 for HD_720_60_HS) — 2x smooth slow-motion playback.
             fmt.setFloat("capture-rate", fps.toFloat())
         }
         return fmt
@@ -360,6 +360,7 @@ class RecordingController(
         val out = try {
             mc.getOutputBuffer(index)
         } catch (e: Throwable) {
+            Log.w("M14_CINEPRO", "getOutputBuffer failed", e)
             null
         }
         if (out != null && info.size > 0 && (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {

@@ -1,5 +1,6 @@
 package com.m14.cinepro.hud
 
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.content.Context
 import android.content.res.ColorStateList
@@ -38,9 +39,9 @@ import kotlin.math.roundToInt
  *
  *   [1] GuidesOverlayView — aspect masks / grids / de-squeeze (mapped to the 16:9 picture rect)
  *   [2] FocusOverlayView  — tap reticle + F1/F2/F3 markers, owns picture-area gestures
- *   [3] topZone           — TOP bar (48 dp): FPS SHUTTER IRIS ISO WB TINT | TIMECODE | HEVC 80M
- *                           TEMP/BATT, plus the single floating slider row directly underneath
- *   [4] rightColumn       — RIGHT (72 dp): REC circle, AE/AF LOCK, F1/F2/F3, SLATE
+ *   [3] topZone           — TOP bar (48 dp): scrollable pills (FPS..TINT) | TIMECODE | scrollable
+ *                           pills (ZOOM HEVC TEMP/BATT RESET ALL) + floating slider row
+ *   [4] rightColumn       — RIGHT (72 dp): REC circle, A/AF LOCK, F1/F2/F3, MEDIA, SLATE
  *   [5] bottomZone        — BOTTOM bar (48 dp): 64-bin histogram | PEAK ZEBRA FALSE COLOR LUT
  *                           GUIDES EIS | stereo L/R VU meter, slider row floats above the bar
  *
@@ -66,6 +67,8 @@ class HudController(
         fun onFocusTap(nx: Float, ny: Float)               // normalized picture coords
         fun onMarkerTap(index: Int)                        // 0..2 short tap -> AF at marker
         fun onMarkerLongPress(index: Int)                  // save last tap point as marker
+        fun onMediaOpen()                                  // MEDIA button -> MainActivity opens the Media Pool
+        fun onResetAll()                                   // RESET ALL -> MainActivity wipes settings + rebuilds session
     }
 
     // -----------------------------------------------------------------------------------------
@@ -77,6 +80,9 @@ class HudController(
 
     /** MainActivity forwards to GlViewfinder.applyLut(preset, path). */
     var lutApplier: ((Models.LutPreset, String?) -> Unit)? = null
+
+    /** MainActivity forwards to CameraEngine.setZoomRatio (HUD never touches engine classes). */
+    var zoomApplier: ((Float) -> Unit)? = null
 
     /** MainActivity pushes changed exposure/WB settings into the camera engine. */
     var onSettingsDirty: (() -> Unit)? = null
@@ -115,6 +121,8 @@ class HudController(
     private lateinit var tcPill: TextView
     private lateinit var codecPill: TextView
     private lateinit var sysPill: TextView
+    private lateinit var zoomPill: TextView
+    private lateinit var resetAllPill: TextView
     private lateinit var peakPill: TextView
     private lateinit var zebraPill: TextView
     private lateinit var fcPill: TextView
@@ -125,6 +133,9 @@ class HudController(
 
     /** The one open panel id, or null. Opening a panel closes every other panel first. */
     private var openPanelId: String? = null
+
+    /** Live rack-zoom servo (QA Phase 6); cancelled when a new target arrives or on destroy. */
+    private var zoomRackAnim: ValueAnimator? = null
     private var chromeVisible = true
     private var lastTap: FloatArray? = null
 
@@ -179,6 +190,15 @@ class HudController(
         }
         focusOverlay.onDoubleTap = { toggleChrome() }
         focusOverlay.onVerticalSwipe = { toggleChrome() }
+        // QA Phase 6: two-finger pinch = multiplicative zoom delta (direct apply — a pinch must
+        // never queue behind the 1.5 s rack servo, so the servo is cancelled here).
+        focusOverlay.onZoom = { factor ->
+            zoomRackAnim?.cancel()
+            val target = (settings.zoomRatio * factor).coerceIn(Models.ZOOM_MIN, Models.ZOOM_MAX)
+            settings.zoomRatio = target
+            zoomApplier?.invoke(target)
+            zoomPill.text = zoomLabel()
+        }
     }
 
     // -----------------------------------------------------------------------------------------
@@ -206,18 +226,32 @@ class HudController(
         wbPill = makePill(settings.wbLabel()) { togglePanel(PANEL_WB) }
         tintPill = makePill(tintLabel()) { togglePanel(PANEL_TINT) }
         tcPill = makePill("00:00:00:00", mono = true, sizeSp = 14f, onClick = null)
+        zoomPill = makePill(zoomLabel()) { togglePanel(PANEL_ZOOM) }
         codecPill = makePill(codecLabel()) { togglePanel(PANEL_CODEC) }
         sysPill = makePill("—") { togglePanel(PANEL_SYS) }
+        resetAllPill = makePill(activity.getString(R.string.btn_reset_all)) { hooks.onResetAll() }
 
-        val pillLp = topPillLp()
-        topBar.addView(fpsPill, pillLp)
-        topBar.addView(shutterPill, topPillLp())
-        topBar.addView(irisPill, topPillLp())
-        topBar.addView(isoPill, topPillLp())
-        topBar.addView(wbPill, topPillLp())
-        topBar.addView(tintPill, topPillLp())
+        // QA Phase 6C1/C2 crowding law: the bar is split into two weight-1 scrollable groups with
+        // the timecode fixed between them — pills scroll when crowded, nothing is pushed off
+        // screen, and the TC stays visually centered while the two groups stay symmetric.
+        val leftScroll = HorizontalScrollView(activity).apply {
+            isHorizontalScrollBarEnabled = false
+            clipToPadding = false
+        }
+        val leftGroup = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        leftGroup.addView(fpsPill, topPillLp())
+        leftGroup.addView(shutterPill, topPillLp())
+        leftGroup.addView(irisPill, topPillLp())
+        leftGroup.addView(isoPill, topPillLp())
+        leftGroup.addView(wbPill, topPillLp())
+        leftGroup.addView(tintPill, topPillLp())
+        leftScroll.addView(leftGroup)
+        topBar.addView(
+            leftScroll,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
 
-        // Centered timecode: weight-1 FrameLayout keeps TC dead-center regardless of pill widths.
+        // Centered timecode: fixed wrap-content block between the two weight-1 scroll groups.
         val tcCenter = FrameLayout(activity)
         val tcLp = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -226,11 +260,31 @@ class HudController(
         tcCenter.addView(tcPill, tcLp)
         topBar.addView(
             tcCenter,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT
+            )
         )
 
-        topBar.addView(codecPill, topPillLp())
-        topBar.addView(sysPill, topPillLp())
+        // Right group: ZOOM | codec | system | RESET ALL. fillViewport + row gravity END keeps the
+        // pills hugging the right edge when there is room; they scroll leftward when crowded.
+        val rightScroll = HorizontalScrollView(activity).apply {
+            isHorizontalScrollBarEnabled = false
+            clipToPadding = false
+            isFillViewport = true
+        }
+        val rightGroup = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        }
+        rightGroup.addView(zoomPill, topPillLp())
+        rightGroup.addView(codecPill, topPillLp())
+        rightGroup.addView(sysPill, topPillLp())
+        rightGroup.addView(resetAllPill, topPillLp())
+        rightScroll.addView(rightGroup)
+        topBar.addView(
+            rightScroll,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
 
         topZone.addView(
             topBar,
@@ -298,6 +352,12 @@ class HudController(
             markerButtons[i] = btn
             rightColumn.addView(btn, columnLp(dp(44f), ViewGroup.LayoutParams.WRAP_CONTENT, dp(6f)))
         }
+
+        // QA Phase 5: MEDIA opens the Media Pool (MainActivity owns the dialog).
+        val mediaBtn = makeColumnButton(activity.getString(R.string.btn_media)).apply {
+            setOnClickListener { hooks.onMediaOpen() }
+        }
+        rightColumn.addView(mediaBtn, columnLp(dp(60f), ViewGroup.LayoutParams.WRAP_CONTENT, dp(8f)))
 
         val slateBtn = makeColumnButton(activity.getString(R.string.btn_slate)).apply {
             setOnClickListener { hooks.onSlateOpen() }
@@ -465,6 +525,7 @@ class HudController(
         wbPill.text = settings.wbLabel()
         tintPill.text = tintLabel()
         codecPill.text = codecLabel()
+        zoomPill.text = zoomLabel()
 
         setActiveBg(lockButton, settings.aeLock)
         setActiveBg(peakPill, settings.peakingMode != Models.PeakingMode.OFF)
@@ -563,6 +624,7 @@ class HudController(
     }
 
     fun destroy() {
+        zoomRackAnim?.cancel()
         closePanel()
         mainHandler.removeCallbacksAndMessages(null)
     }
@@ -574,6 +636,10 @@ class HudController(
     private fun irisLabel(): String = "f/1.8"
 
     private fun tintLabel(): String = String.format(Locale.US, "TINT %+d", settings.tint)
+
+    /** QA Phase 6: focal-equivalent zoom readout, e.g. "1.0x 26mm" (CONTROL_ZOOM_RATIO law). */
+    private fun zoomLabel(): String =
+        String.format(Locale.US, "%.1fx %dmm", settings.zoomRatio, Models.FOCAL_EQUIV_MM)
 
     private fun codecLabel(): String = "HEVC ${settings.bitrate.label}"
 
@@ -701,6 +767,7 @@ class HudController(
         const val PANEL_ISO = "iso"
         const val PANEL_WB = "wb"
         const val PANEL_TINT = "tint"
+        const val PANEL_ZOOM = "zoom"
         const val PANEL_CODEC = "codec"
         const val PANEL_SYS = "sys"
         const val PANEL_PEAK = "peak"
@@ -753,7 +820,7 @@ class HudController(
 
         val isTop = when (id) {
             PANEL_FPS, PANEL_SHUTTER, PANEL_IRIS, PANEL_ISO, PANEL_WB, PANEL_TINT,
-            PANEL_CODEC, PANEL_SYS -> true
+            PANEL_ZOOM, PANEL_CODEC, PANEL_SYS -> true
             else -> false
         }
         val host = if (isTop) topSliderRow else bottomSliderRow
@@ -771,7 +838,9 @@ class HudController(
         lp.topMargin = dp(4f)
         lp.marginStart = dp(8f)
         lp.marginEnd = dp(84f)
-        lp.bottomMargin = dp(4f)
+        // QA Phase 6C3: bottom-hosted panels are siblings ABOVE bottomBar in bottomZone, so the
+        // histogram/audio-meter scopes can never be overlapped; the 6 dp gap is separation only.
+        lp.bottomMargin = dp(6f)
         host.addView(wrap, lp)
         host.visibility = View.VISIBLE
     }
@@ -784,6 +853,7 @@ class HudController(
             PANEL_ISO -> panelIso(container)
             PANEL_WB -> panelWb(container)
             PANEL_TINT -> panelTint(container)
+            PANEL_ZOOM -> panelZoom(container)
             PANEL_CODEC -> panelCodec(container)
             PANEL_SYS -> panelSys(container)
             PANEL_PEAK -> panelPeak(container)
@@ -838,6 +908,11 @@ class HudController(
             ).apply { bottomMargin = dp(8f) }
         )
         return scroll
+    }
+
+    /** The tactile per-panel reset chip (QA Phase 4): restores this parameter's clean default. */
+    private fun LinearLayout.resetChip(action: () -> Unit) {
+        chipRow(listOf(ChipItem(activity.getString(R.string.btn_reset), { false }, action)))
     }
 
     private fun LinearLayout.caption(text: String): TextView {
@@ -973,6 +1048,54 @@ class HudController(
         )
     }
 
+    private fun panelZoom(c: LinearLayout) {
+        c.caption("Digital zoom — CONTROL_ZOOM_RATIO 1.0x-8.0x")
+        c.chipRow(
+            listOf(
+                ChipItem("1.0x (26mm)", { abs(settings.zoomRatio - 1.0f) < 0.01f }, { applyZoom(1.0f) }),
+                ChipItem("1.35x (35mm)", { abs(settings.zoomRatio - 1.35f) < 0.01f }, { applyZoom(1.35f) }),
+                ChipItem("2.0x (52mm)", { abs(settings.zoomRatio - 2.0f) < 0.01f }, { applyZoom(2.0f) }),
+                ChipItem("4.0x (104mm)", { abs(settings.zoomRatio - 4.0f) < 0.01f }, { applyZoom(4.0f) }),
+                ChipItem(activity.getString(R.string.btn_rack_zoom), { settings.rackZoomOn }, {
+                    settings.rackZoomOn = !settings.rackZoomOn
+                    refreshAll()
+                })
+            )
+        )
+        c.slider(
+            "Zoom", 10, 80, 1, (settings.zoomRatio * 10f).roundToInt(),
+            { String.format(Locale.US, "%.1fx", it / 10f) },
+            { v -> applyZoom(v / 10f) }
+        )
+        c.resetChip { applyZoom(Models.ZOOM_DEFAULT) }
+    }
+
+    /**
+     * QA Phase 6 zoom sink: clamps to the CONTROL_ZOOM_RATIO law, drives zoomApplier (wired by
+     * MainActivity to CameraEngine.setZoomRatio) and, with RACK 1.5s armed, sweeps a 1.5 s servo.
+     */
+    private fun applyZoom(target: Float) {
+        val to = target.coerceIn(Models.ZOOM_MIN, Models.ZOOM_MAX)
+        if (settings.rackZoomOn && to != settings.zoomRatio) {
+            // Smooth 1.5 s servo rack (QA Phase 6): ValueAnimator sweep, zoomApplier every frame.
+            zoomRackAnim?.cancel()
+            val anim = ValueAnimator.ofFloat(settings.zoomRatio, to)
+            anim.duration = Models.RACK_ZOOM_MS
+            anim.addUpdateListener { a ->
+                val z = a.animatedValue as Float
+                settings.zoomRatio = z
+                zoomApplier?.invoke(z)
+                zoomPill.text = zoomLabel()
+            }
+            zoomRackAnim = anim
+            anim.start()
+        } else {
+            settings.zoomRatio = to
+            zoomApplier?.invoke(to)
+        }
+        refreshAll()
+    }
+
     private fun panelShutter(c: LinearLayout) {
         c.caption("Shutter — angle / speed (angle is the invariant)")
         var angleBox: LinearLayout? = null
@@ -1027,11 +1150,12 @@ class HudController(
                 })
             }
         )
+        // QA Phase 6B3: tenths of a degree — 172.8° (24 fps, 50 Hz flicker-free) is reachable.
         angle.slider(
-            "Angle", 45, 360, 1, settings.shutterAngleDeg.roundToInt(),
-            { "$it°" },
+            "Angle", 450, 3600, 1, (settings.shutterAngleDeg * 10f).roundToInt(),
+            { String.format(Locale.US, "%.1f°", it / 10f) },
             { v ->
-                settings.shutterAngleDeg = v.toFloat()
+                settings.shutterAngleDeg = v / 10f
                 onSettingsDirty?.invoke()
                 refreshAll()
                 readout.text = exposureReadout()
@@ -1065,6 +1189,14 @@ class HudController(
             )
         )
         c.addView(readout)
+        c.resetChip {
+            settings.shutterMode = Models.ShutterMode.ANGLE
+            settings.shutterAngleDeg = 180f
+            onSettingsDirty?.invoke()
+            refreshAll()
+            readout.text = exposureReadout()
+            syncMode()
+        }
         syncMode()
     }
 
@@ -1084,6 +1216,11 @@ class HudController(
                 }
             )
         }
+        c.resetChip {
+            settings.evCompensation = 0f
+            onSettingsDirty?.invoke()
+            refreshAll()
+        }
     }
 
     private fun panelIso(c: LinearLayout) {
@@ -1099,25 +1236,43 @@ class HudController(
                     settings.manualExposure = true
                     onSettingsDirty?.invoke()
                     refreshAll()
-                }),
-                ChipItem("AE LOCK", { settings.aeLock }, {
-                    settings.aeLock = !settings.aeLock
-                    onSettingsDirty?.invoke()
-                    refreshAll()
                 })
             )
         )
+        // QA Phase 6A3: AE lock only exists while the auto engine is actually driving exposure.
+        if (!settings.manualExposure) {
+            c.chipRow(
+                listOf(
+                    ChipItem("AE LOCK", { settings.aeLock }, {
+                        settings.aeLock = !settings.aeLock
+                        onSettingsDirty?.invoke()
+                        refreshAll()
+                    })
+                )
+            )
+        }
         if (settings.manualExposure) {
+            // QA Phase 6B1: 16-stop 1/3-stop ladder — the slider indexes stops, never interpolates.
             c.slider(
-                "ISO", Models.ISO_MIN, Models.ISO_MAX, 100, settings.iso,
-                { "ISO $it" },
+                "ISO", 0, Models.isoStops().size - 1, 1, isoStopIndex(settings.iso),
+                { "ISO ${Models.isoStops()[it].toInt()}" },
                 { v ->
-                    settings.iso = v
+                    settings.iso = Models.isoStops()[v].toInt()
                     onSettingsDirty?.invoke()
                 }
             )
         }
+        c.resetChip {
+            settings.manualExposure = false
+            settings.aeLock = false
+            onSettingsDirty?.invoke()
+            refreshAll()
+        }
     }
+
+    /** Nearest ladder index for the persisted ISO (QA Phase 6B1; stops are never interpolated). */
+    private fun isoStopIndex(iso: Int): Int =
+        Models.isoStops().indexOfFirst { it.toInt() >= iso }.takeIf { it >= 0 } ?: 0
 
     private fun panelWb(c: LinearLayout) {
         c.caption("White balance")
@@ -1131,26 +1286,38 @@ class HudController(
             }
         )
         if (settings.wbPreset == Models.WbPreset.KELVIN) {
+            // QA Phase 6B2: perceptually uniform mired space (10^6 / K), 1M step.
             c.slider(
-                "Kelvin", Models.KELVIN_MIN, Models.KELVIN_MAX, 50, settings.kelvin,
-                { "$it K" },
+                "Kelvin", Models.miredMin(), Models.miredMax(), 1, Models.miredFromKelvin(settings.kelvin),
+                { m -> "${Models.kelvinFromMired(m)} K · ${m}M" },
                 { v ->
-                    settings.kelvin = v
+                    settings.kelvin = Models.kelvinFromMired(v)
                     settings.wbPreset = Models.WbPreset.KELVIN
                     onSettingsDirty?.invoke()
                     refreshAll()
                 }
             )
         }
-        c.chipRow(
-            listOf(
-                ChipItem("AWB LOCK", { settings.awbLock }, {
-                    settings.awbLock = !settings.awbLock
-                    onSettingsDirty?.invoke()
-                    refreshAll()
-                })
+        // QA Phase 6A4: AWB lock only while a scene preset drives the AWB engine (KELVIN ignores it).
+        if (settings.wbPreset != Models.WbPreset.KELVIN) {
+            c.chipRow(
+                listOf(
+                    ChipItem("AWB LOCK", { settings.awbLock }, {
+                        settings.awbLock = !settings.awbLock
+                        onSettingsDirty?.invoke()
+                        refreshAll()
+                    })
+                )
             )
-        )
+        }
+        c.resetChip {
+            settings.wbPreset = Models.WbPreset.AUTO
+            settings.kelvin = 5600
+            settings.tint = 0
+            settings.awbLock = false
+            onSettingsDirty?.invoke()
+            refreshAll()
+        }
     }
 
     private fun wbChipLabel(p: Models.WbPreset): String = when (p) {
@@ -1176,6 +1343,11 @@ class HudController(
                 refreshAll()
             }
         )
+        c.resetChip {
+            settings.tint = 0
+            onSettingsDirty?.invoke()
+            refreshAll()
+        }
     }
 
     private fun panelSys(c: LinearLayout) {
@@ -1223,6 +1395,11 @@ class HudController(
                 refreshAll()
             }
         )
+        c.resetChip {
+            settings.peakingMode = Models.PeakingMode.OFF
+            settings.peakingStrength = Models.PEAKING_DEFAULT_UI
+            refreshAll()
+        }
     }
 
     private fun peakModeLabel(m: Models.PeakingMode): String = when (m) {
@@ -1258,16 +1435,17 @@ class HudController(
             )
         )
         if (settings.zebraMode == Models.ZebraMode.Z95 || settings.zebraMode == Models.ZebraMode.Z90) {
+            // QA Phase 6B4: the readout is the raw UI threshold — the ×0.93 709 term lives in GL.
             c.slider(
                 "Thresh", 75, 100, 1, (settings.zebraThresholdUi * 100f).roundToInt(),
-                { v ->
-                    String.format(
-                        Locale.US, "%.2f -> %.2f",
-                        v / 100f, v / 100f * Models.ZEBRA_THRESHOLD_SCALE_709
-                    )
-                },
+                { v -> String.format(Locale.US, "%.2f", v / 100f) },
                 { v -> settings.zebraThresholdUi = v / 100f }
             )
+        }
+        c.resetChip {
+            settings.zebraMode = Models.ZebraMode.OFF
+            settings.zebraThresholdUi = Models.ZEBRA_DEFAULT_UI_THRESHOLD
+            refreshAll()
         }
     }
 
@@ -1293,6 +1471,7 @@ class HudController(
                 })
             )
         )
+        c.resetChip { selectLut(Models.LutPreset.OFF) }
     }
 
     private fun selectLut(p: Models.LutPreset) {
@@ -1342,6 +1521,21 @@ class HudController(
                 })
             }
         )
+        // QA Phase 2: operator 180° preview flip (rig / DOF-adapter mounts render inverted).
+        c.chipRow(
+            listOf(
+                ChipItem(activity.getString(R.string.btn_flip), { settings.previewFlip180 }, {
+                    settings.previewFlip180 = !settings.previewFlip180
+                })
+            )
+        )
+        c.resetChip {
+            settings.guide = Models.GuidePreset.OFF
+            settings.grid = Models.GridOverlay.NONE
+            settings.desqueeze = Models.DesqueezePreset.X100
+            settings.previewFlip180 = false
+            refreshAll()
+        }
     }
 
     // -----------------------------------------------------------------------------------------

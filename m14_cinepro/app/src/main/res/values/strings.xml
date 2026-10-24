@@ -43,7 +43,7 @@
     <string name="media_pool_delete">DELETE</string>
     <string name="media_pool_share">SHARE</string>
     <string name="media_pool_slate">SLATE JSON</string>
-    <string name="media_pool_good_take">&#x2605 GOOD TAKE</string>
+    <string name="media_pool_good_take">&#x2605; GOOD TAKE</string>
     <string name="media_pool_deleted">Clip deleted</string>
     <string name="media_pool_delete_confirm">Delete this clip permanently?</string>
 

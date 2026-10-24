@@ -116,6 +116,7 @@ class ExposureController(private val settings: SettingsStore) {
         try {
             characteristics.get(key)
         } catch (t: Throwable) {
+            Log.w("M14_CINEPRO", "characteristics key read failed", t)
             null
         }
 

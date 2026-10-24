@@ -45,8 +45,12 @@ private const val FRAME_DROP_INFO_INTERVAL_MS = 1_000L
 /** Delay before the post-tap repeating request flips CONTROL_AF_TRIGGER START -> IDLE (~150 ms law). */
 private const val AF_TRIGGER_IDLE_RESET_DELAY_MS = 160L
 
-/** HFR (720p high-speed) target fps — verified output of the M14 high-speed pipeline. */
-private const val HFR_FPS = 60
+/**
+ * HFR (720p high-speed) target fps. QA Phase 3: the M14 HAL high-speed table is ONLY [30,120] +
+ * [120,120]; a fabricated Range(60,60) crashed createHighSpeedRequestList with
+ * IllegalArgumentException, so 120 is the only exact slow-motion target on this device.
+ */
+private const val HFR_FPS = 120
 
 /** Raised for CameraDevice.StateCallback.onError codes (no dedicated platform exception type). */
 private class CameraDeviceException(message: String) : RuntimeException(message)
@@ -73,11 +77,15 @@ fun <T> CaptureRequest.Builder.trySet(key: CaptureRequest.Key<T>, value: T) {
  * repeating request that carries the manual/auto exposure, WB and AF state applied by
  * [ExposureController], [WhiteBalanceController] and [FocusController].
  *
- * Key laws implemented here (stage3_camera2.md + M14_VERIFIED_TRUTH.md):
+ * Key laws implemented here (stage3_camera2.md + M14_VERIFIED_TRUTH.md + QA V3 remediation):
  *  - camera id "0" opened on a dedicated HandlerThread "CameraEngine" (priority -2);
  *  - regular sessions via SessionConfiguration(SESSION_REGULAR), HFR (settings.resolution.highSpeed)
  *    via createConstrainedHighSpeedCaptureSession + createHighSpeedRequestList with
- *    CONTROL_AE_TARGET_FPS_RANGE from the §2.4 e(fps) selection law (upper == 60, prefer lower == 60);
+ *    CONTROL_AE_TARGET_FPS_RANGE from the QA Phase 3 selection law ([hfrFpsRange]: prefer exact
+ *    Range(120,120); the M14 HAL table is ONLY [30,120] + [120,120]);
+ *  - QA Phase 3 safe-HS law: any HS session failure degrades ONCE to a regular session
+ *    ([hsFallbackActive], AE clamped to 30 fps) instead of crashing or wedging;
+ *  - QA Phase 6 zoom: CONTROL_ZOOM_RATIO is driven in regular sessions only ([setZoomRatio]);
  *  - base request template TEMPLATE_RECORD (TEMPLATE_PREVIEW for HFR, required by CONSTRAINED_HIGH_SPEED),
  *    CONTROL_CAPTURE_INTENT = VIDEO_RECORD (non-HFR only), CONTROL_MODE_AUTO,
  *    CONTROL_AE_TARGET_FPS_RANGE = Range(fps, fps), NOISE_REDUCTION_MODE_FAST (via FocusController);
@@ -135,6 +143,16 @@ class CameraEngine(
     @Volatile private var activeArrayRect: Rect? = null
     @Volatile private var exposureCaps: ExposureController.CameraCaps? = null
     @Volatile private var highSpeedFpsRanges: Array<Range<Int>>? = null
+
+    /** CONTROL_ZOOM_RATIO_RANGE from the HAL; null until characteristics are read (or unavailable). */
+    @Volatile private var zoomRange: Range<Float>? = null
+
+    /**
+     * QA Phase 3 safe-HS law: set once when a high-speed session fails, so the automatic rebuild
+     * (and every later request build) goes through the regular path at <= 30 fps instead of
+     * re-entering the failing HS configuration. Cleared at the top of every createSession call.
+     */
+    @Volatile private var hsFallbackActive = false
 
     private var currentRecordSurface: Surface? = null
     private var currentPreviewSurface: Surface? = null
@@ -215,9 +233,13 @@ class CameraEngine(
      * size, `[1280x720]`, and attaching a 1920x1080 preview surface throws
      * `IllegalArgumentException: Surface size 1920x1080 is not part of the high speed supported
      * size list` (V1_BUG_LOG). CP3 law: BOTH the preview buffer AND the MediaCodec surface are
-     * 1280x720 in the 720p 60 fps mode. Regular resolutions use SessionConfiguration(SESSION_REGULAR);
+     * 1280x720 in the 720p HS mode. Regular resolutions use SessionConfiguration(SESSION_REGULAR);
      * high-speed resolutions use createConstrainedHighSpeedCaptureSession and a
      * createHighSpeedRequestList repeating burst.
+     *
+     * QA Phase 3 safe-HS law: calling createSession clears [hsFallbackActive], so the HS mode is
+     * retried from scratch on every explicit (re)build; if the HS configuration then fails, the
+     * automatic rebuild degrades to a regular session (AE clamped to 30 fps) instead of wedging.
      *
      * [onConfigured] is invoked exactly once on the main thread with the outcome; on failure one
      * automatic rebuild is attempted before reporting false.
@@ -225,9 +247,11 @@ class CameraEngine(
     fun createSession(recordSurface: Surface?, previewTexture: SurfaceTexture, onConfigured: (Boolean) -> Unit) {
         val handler = ensureHandler()
         handler.post {
+            // Explicit (re)build request: retry HS from scratch — clear any active fallback.
+            hsFallbackActive = false
+            sessionRebuildAttempted = false
             currentRecordSurface = recordSurface
             currentPreviewTexture = previewTexture
-            sessionRebuildAttempted = false
             try {
                 val p = settings.resolution
                 if (p.highSpeed) {
@@ -243,7 +267,7 @@ class CameraEngine(
             closeSessionQuietly()
             val previewSurface = Surface(previewTexture)
             currentPreviewSurface = previewSurface
-            createSessionOutputs(recordSurface, previewSurface, onConfigured)
+            createSessionOutputs(recordSurface, previewSurface, onConfigured = onConfigured)
         }
     }
 
@@ -274,6 +298,9 @@ class CameraEngine(
         }
     }
 
+    /** QA Phase 6 name for the AF_REGIONS + AF_TRIGGER_START pull; identical to [focusAt]. */
+    fun triggerTapFocus(nx: Float, ny: Float) = focusAt(nx, ny)
+
     /**
      * Torch toggle. Preferred path is request-level FLASH_MODE_TORCH inside the session
      * (stage3 §2.9 x()), so this just records the state and re-applies settings; the value is
@@ -284,6 +311,26 @@ class CameraEngine(
         val handler = ensureHandler()
         handler.post { applySettingsInternal() }
     }
+
+    /** Max digital zoom reported by the HAL (CONTROL_ZOOM_RATIO_RANGE), clamped to Models.ZOOM_MAX. */
+    fun maxZoomRatio(): Float {
+        val upper = zoomRange?.upper ?: Models.ZOOM_MAX
+        return if (upper.isNaN() || upper.isInfinite()) Models.ZOOM_MAX else upper.coerceIn(Models.ZOOM_MIN, Models.ZOOM_MAX)
+    }
+
+    /**
+     * Set the zoom ratio (persisted setting; setter self-clamps 1..8 + NaN-guard) and push the
+     * repeating request so the new CONTROL_ZOOM_RATIO lands without a session rebuild.
+     */
+    fun setZoomRatio(ratio: Float) {
+        val max = maxZoomRatio()
+        val target = if (ratio.isNaN() || ratio.isInfinite()) Models.ZOOM_DEFAULT else ratio.coerceIn(Models.ZOOM_MIN, max)
+        settings.zoomRatio = target
+        ensureHandler().post { applySettingsInternal() }
+    }
+
+    /** Current zoom ratio (persisted setting; Models.ZOOM_DEFAULT until [setZoomRatio]). */
+    fun zoomRatio(): Float = settings.zoomRatio
 
     /** True while a configured capture session with a record output is live. */
     fun isRecordingSessionActive(): Boolean = sessionConfigured && currentRecordSurface != null
@@ -357,6 +404,13 @@ class CameraEngine(
             highSpeedFpsRanges = try {
                 characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.highSpeedVideoFpsRanges
             } catch (t: Throwable) {
+                Log.w("M14_CINEPRO", "highSpeed fps ranges unavailable", t)
+                null
+            }
+            zoomRange = try {
+                characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            } catch (t: Throwable) {
+                Log.w("M14_CINEPRO", "zoom ratio range unavailable", t)
                 null
             }
         } catch (e: Throwable) {
@@ -377,14 +431,21 @@ class CameraEngine(
     }
 
     @Suppress("DEPRECATION")
-    private fun createSessionOutputs(recordSurface: Surface?, previewSurface: Surface, onConfigured: (Boolean) -> Unit) {
+    private fun createSessionOutputs(
+        recordSurface: Surface?,
+        previewSurface: Surface,
+        forceRegular: Boolean = false,
+        onConfigured: (Boolean) -> Unit
+    ) {
         val cameraDevice = device
         if (cameraDevice == null) {
             Log.w(TAG, "createSession without an open device")
             mainNotify { onConfigured(false) }
             return
         }
-        val highSpeed = settings.resolution.highSpeed
+        // QA Phase 3 safe-HS law: the effective mode is HS only when the ResPreset asks for it AND
+        // no fallback is active AND the caller does not force the regular path.
+        val highSpeed = settings.resolution.highSpeed && !hsFallbackActive && !forceRegular
 
         val outputs = ArrayList<Surface>(2)
         if (recordSurface != null) outputs.add(recordSurface)
@@ -451,6 +512,12 @@ class CameraEngine(
         Log.w(TAG, "session failure", e)
         sessionConfigured = false
         mainNotify { listener.onError("session", e) }
+        if (settings.resolution.highSpeed && !hsFallbackActive) {
+            // QA Phase 3 safe-HS law: never crash or wedge on an HS failure — degrade once to a
+            // regular session (AE clamped to 30 fps) so the rebuild below bypasses the HS path.
+            hsFallbackActive = true
+            Log.w("M14_CINEPRO", "HS session failed — falling back to regular session @30fps")
+        }
         if (!sessionRebuildAttempted) {
             sessionRebuildAttempted = true
             val previewSurface = currentPreviewSurface
@@ -474,7 +541,9 @@ class CameraEngine(
         val cameraDevice = device ?: return null
         val previewSurface = currentPreviewSurface ?: return null
         val recordSurface = currentRecordSurface
-        val highSpeed = settings.resolution.highSpeed
+        // QA Phase 3: the effective mode follows the fallback flag — an HS ResPreset degrades to a
+        // regular request set (template/intent/fps-range/zoom all follow this flag).
+        val highSpeed = settings.resolution.highSpeed && !hsFallbackActive
 
         val template = if (highSpeed) CameraDevice.TEMPLATE_PREVIEW else CameraDevice.TEMPLATE_RECORD
         val builder = try {
@@ -498,12 +567,17 @@ class CameraEngine(
         }
 
         if (highSpeed) {
-            // HFR repeating burst: §2.4 e(fps) selection (upper == 60, prefer lower == 60).
+            // HFR repeating burst: QA Phase 3 high-speed range selection ([hfrFpsRange] law).
             builder.trySet(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, hfrFpsRange())
         } else {
             builder.trySet(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
-            val fps = settings.fps
+            // Regular AE fps law: aeAvailableTargetFpsRanges on Camera 0 tops out at [30,30], so an
+            // HS ResPreset running as a regular fallback session is clamped 60 -> 30 fps.
+            val fps = minOf(settings.fps, 30)
             if (fps > 0) builder.trySet(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
+            // QA Phase 6 zoom: CONTROL_ZOOM_RATIO is only driven in regular sessions — HFR + zoom
+            // is unverified on this HAL, so the HS path never carries it.
+            builder.trySet(CaptureRequest.CONTROL_ZOOM_RATIO, settings.zoomRatio)
         }
         builder.trySet(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
         // CONTROL_ENABLE_ZSL is never set (M14 law: deterministic non-ZSL video pipeline).
@@ -553,23 +627,33 @@ class CameraEngine(
         setRepeating(currentSession, builder)
     }
 
-    /** stage3 §2.4 e(fps): pick the high-speed range with upper == HFR_FPS, prefer lower == HFR_FPS. */
+    /**
+     * QA Phase 3 HFR selection law. The M14 HAL high-speed table is exactly [30,120] and [120,120]
+     * (QA_FAILURE_REPORT.md Phase 3 — a fabricated Range(60,60) threw IllegalArgumentException
+     * inside createHighSpeedRequestList), so the selection order is:
+     *  1. exact Range(120,120) — the verified slow-motion mode;
+     *  2. the range with upper == 120 and the smallest lower (e.g. [30,120]);
+     *  3. Range(30,120) when present (defensive; only reachable if HFR_FPS ever changes);
+     *  4. the first range the HAL table actually publishes — a range is NEVER fabricated while
+     *     the table is known;
+     *  5. Range(HFR_FPS, HFR_FPS) only when the HAL table is null/empty (characteristics unread).
+     */
     private fun hfrFpsRange(): Range<Int> {
         val ranges = highSpeedFpsRanges
-        if (ranges != null) {
-            var minLower = -1
-            var bestWithMinLower: Range<Int>? = null
-            for (range in ranges) {
-                if (range.upper != HFR_FPS) continue
-                if (range.lower == HFR_FPS) return range
-                if (minLower < 0 || range.lower < minLower) {
-                    minLower = range.lower
-                    bestWithMinLower = range
-                }
-            }
-            if (bestWithMinLower != null) return bestWithMinLower
+        if (ranges == null || ranges.isEmpty()) return Range(HFR_FPS, HFR_FPS)
+        for (range in ranges) {
+            if (range.lower == HFR_FPS && range.upper == HFR_FPS) return range
         }
-        return Range(HFR_FPS, HFR_FPS)
+        var smallestLower: Range<Int>? = null
+        for (range in ranges) {
+            if (range.upper != HFR_FPS) continue
+            if (smallestLower == null || range.lower < smallestLower.lower) smallestLower = range
+        }
+        if (smallestLower != null) return smallestLower
+        for (range in ranges) {
+            if (range.lower == 30 && range.upper == HFR_FPS) return range
+        }
+        return ranges.firstOrNull() ?: Range(HFR_FPS, HFR_FPS)
     }
 
     // -----------------------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.os.SystemClock
 import android.view.GestureDetector
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import com.m14.cinepro.core.Models
 import com.m14.cinepro.core.SettingsStore
@@ -17,8 +18,9 @@ import kotlin.math.abs
  *
  * Responsibilities:
  *  - Owns ALL viewfinder-area gestures: single tap -> focus tap (normalized coords),
- *    double tap + fast vertical swipe (> 80 dp) -> HUD chrome toggle, forwarded via the
- *    [onTap] / [onDoubleTap] / [onVerticalSwipe] callbacks wired by [HudController].
+ *    double tap + fast vertical swipe (> 80 dp) -> HUD chrome toggle, two-finger pinch ->
+ *    multiplicative zoom delta, forwarded via the [onTap] / [onDoubleTap] / [onVerticalSwipe] /
+ *    [onZoom] callbacks wired by [HudController].
  *  - Draws the animated white corner-bracket tap box.
  *  - Draws persistent F1/F2/F3 focus markers from [SettingsStore.focusMarkers].
  */
@@ -36,6 +38,9 @@ class FocusOverlayView(context: Context, private val settings: SettingsStore) : 
 
     /** Fast vertical swipe > 80 dp — HUD chrome toggle. */
     var onVerticalSwipe: (() -> Unit)? = null
+
+    /** Multiplicative zoom delta from a 2-finger pinch (QA Phase 6). */
+    var onZoom: ((Float) -> Unit)? = null
 
     private var tapNx = -1f
     private var tapNy = -1f
@@ -64,13 +69,27 @@ class FocusOverlayView(context: Context, private val settings: SettingsStore) : 
         setShadowLayer(3f, 0f, 0f, 0xB3000000.toInt())
     }
 
+    /** True while a two-finger scale is live — suppresses the stray tap a pinch can plant. */
+    private var scaleFocus = false
+
+    private val scaleDetector =
+        ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                val f = detector.scaleFactor
+                if (!f.isNaN() && !f.isInfinite() && f > 0f) onZoom?.invoke(f)
+                return true
+            }
+        })
+
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent): Boolean = true
 
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            if (scaleFocus) return true
             // CP1 law: taps map through the 16:9 picture rect (the GL letterbox), not the full
-            // window — pillar/letterbox taps clamp to the picture edge.
-            val pic = Models.pictureRect(width, height)
+            // window — pillar/letterbox taps clamp to the picture edge. De-squeeze (QA Phase 2)
+            // stretches the rect horizontally, so taps map through the stretched picture too.
+            val pic = Models.pictureRect(width, height, settings.desqueeze.factor)
             val nx = ((e.x - pic[0]) / pic[2].coerceAtLeast(1f)).coerceIn(0f, 1f)
             val ny = ((e.y - pic[1]) / pic[3].coerceAtLeast(1f)).coerceIn(0f, 1f)
             showTapBox(nx, ny)
@@ -98,7 +117,13 @@ class FocusOverlayView(context: Context, private val settings: SettingsStore) : 
         isClickable = true
         isFocusable = false
         contentDescription = "Viewfinder touch area"
-        setOnTouchListener { _, event -> gestures.onTouchEvent(event) }
+        // Scale first (QA Phase 6 pinch-zoom), then the single-finger gesture set — the gesture
+        // behavior is unchanged; an active pinch only suppresses the tap-focus it would plant.
+        setOnTouchListener { _, event ->
+            scaleDetector.onTouchEvent(event)
+            scaleFocus = scaleDetector.isInProgress()
+            gestures.onTouchEvent(event)
+        }
     }
 
     /** Show the animated focus box at the given normalized position. */
@@ -121,7 +146,8 @@ class FocusOverlayView(context: Context, private val settings: SettingsStore) : 
         if (w <= 0f || h <= 0f) return
 
         // CP1 law: the live picture is the centered 16:9 rect — reticle + markers map into it.
-        val pic = Models.pictureRect(width, height)
+        // De-squeeze (QA Phase 2) stretches the rect horizontally; overlays follow the stretch.
+        val pic = Models.pictureRect(width, height, settings.desqueeze.factor)
         val picLeft = pic[0]
         val picTop = pic[1]
         val picW = pic[2]

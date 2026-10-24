@@ -157,15 +157,21 @@ object Models {
      * horizontal-only transform).
      */
     fun pictureRect(screenW: Int, screenH: Int, desqueezeFactor: Float): FloatArray {
-        val base = pictureRect(screenW, screenH)
+        val w = screenW.coerceAtLeast(1)
+        val h = screenH.coerceAtLeast(1)
+        var ph = h.toFloat()
+        var pw = ph * PICTURE_ASPECT
+        if (pw > w) {
+            pw = w.toFloat()
+            ph = pw / PICTURE_ASPECT
+        }
+        val top = (h - ph) * 0.5f
         val f = if (desqueezeFactor.isNaN() || desqueezeFactor.isInfinite()) 1f
         else desqueezeFactor.coerceAtLeast(1f)
-        if (f <= 1f) return base
-        val w = screenW.coerceAtLeast(1)
-        var pw = base[2] * f
-        if (pw > w) pw = w.toFloat()
-        val left = (w - pw) * 0.5f
-        return floatArrayOf(left, base[1], pw, base[3])
+        if (f <= 1f) return floatArrayOf((w - pw) * 0.5f, top, pw, ph)
+        var sw = pw * f
+        if (sw > w) sw = w.toFloat()
+        return floatArrayOf((w - sw) * 0.5f, top, sw, ph)
     }
 
     /**

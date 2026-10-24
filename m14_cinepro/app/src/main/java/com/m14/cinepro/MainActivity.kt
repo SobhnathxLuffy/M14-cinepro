@@ -24,6 +24,7 @@ import com.m14.cinepro.core.Models
 import com.m14.cinepro.core.SettingsStore
 import com.m14.cinepro.gl.GlViewfinder
 import com.m14.cinepro.hud.HudController
+import com.m14.cinepro.hud.MediaPoolDialog
 import com.m14.cinepro.hud.SlateDialog
 import com.m14.cinepro.recording.RecordingController
 import com.m14.cinepro.recording.StorageHelper
@@ -76,6 +77,20 @@ class MainActivity : Activity(), HudController.Hooks {
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_main)
+
+        // QA Phase 1/6C2 — notch safe insets: pad hud_root out of the landscape display cutout
+        // (min 12 dp so edge chrome never touches the bezel; the M14 is Android 15 / API 30+).
+        val root = findViewById<FrameLayout>(R.id.hud_root)
+        val density = resources.displayMetrics.density
+        root.setOnApplyWindowInsetsListener { v, insets ->
+            val cutout = if (Build.VERSION.SDK_INT >= 30) insets.displayCutout else null
+            val cutL = cutout?.safeInsetLeft ?: 0
+            val cutR = cutout?.safeInsetRight ?: 0
+            val minPad = (12f * density).toInt()
+            v.setPadding(maxOf(cutL, minPad), 0, maxOf(cutR, minPad), 0)
+            insets
+        }
+
         applyImmersive()
 
         val needed = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
@@ -150,7 +165,10 @@ class MainActivity : Activity(), HudController.Hooks {
 
     private fun applyImmersive() {
         if (Build.VERSION.SDK_INT >= 30) {
-            val ic = try { window.insetsController } catch (_: Throwable) { null }
+            val ic = try { window.insetsController } catch (t: Throwable) {
+                Log.w("M14_CINEPRO", "insets controller unavailable", t)
+                null
+            }
             ic?.let {
                 it.hide(WindowInsets.Type.systemBars())
                 it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -210,6 +228,7 @@ class MainActivity : Activity(), HudController.Hooks {
             h.lutImportRequester = { requestLutImport() }
             h.lutApplier = { preset, path -> glView?.applyLut(preset, path) }
             h.onSettingsDirty = { engine?.applySettings() }
+            h.zoomApplier = { zoom -> engine?.setZoomRatio(zoom) }
         }
 
         val root = findViewById<FrameLayout>(R.id.hud_root)
@@ -384,7 +403,31 @@ class MainActivity : Activity(), HudController.Hooks {
     }
 
     override fun onSlateOpen() {
-        SlateDialog.show(this, settings) { hud?.refreshAll() }
+        SlateDialog.show(this, settings, { hud?.refreshAll() }, { onResetAll() })
+    }
+
+    override fun onMediaOpen() {
+        val s = storage
+        if (s == null) {
+            hud?.setStatus("MEDIA UNAVAILABLE")
+            return
+        }
+        runCatching { MediaPoolDialog.show(this, s) }
+            .onFailure { Log.w(TAG, "Media pool failed to open", it) }
+    }
+
+    override fun onResetAll() {
+        if (recController?.isRecording() == true) {
+            runCatching { recController?.stopRecording() }
+            hud?.setRecording(false, false)
+        }
+        settings.resetAll()
+        glView?.applyLut(Models.LutPreset.OFF, null)
+        engine?.applySettings()
+        rebuildSession()          // re-prepares the encoder for the reset resolution
+        hud?.refreshAll()
+        hud?.setStatus("RESET ALL")
+        Log.i(TAG, "RESET ALL — settings wiped to factory defaults")
     }
 
     override fun onEisToggled(on: Boolean) {
@@ -412,10 +455,16 @@ class MainActivity : Activity(), HudController.Hooks {
         rebuildSession()
     }
 
+    /** View-space -> camera-space tap correction when the operator 180° flip is armed. */
+    private fun cameraSpaceX(nx: Float): Float = if (settings.previewFlip180) 1f - nx else nx
+    private fun cameraSpaceY(ny: Float): Float = if (settings.previewFlip180) 1f - ny else ny
+
     override fun onFocusTap(nx: Float, ny: Float) {
         val e = engine ?: return
-        runCatching { e.focusAt(nx, ny) }
-            .onFailure { Log.w(TAG, "focusAt failed", it) }
+        // QA Phase 6A2: F-taps/tap-focus drive the camera AF (two-phase tap inside the engine);
+        // coordinates are corrected to camera space only here — on-screen reticles stay in view space.
+        runCatching { e.triggerTapFocus(cameraSpaceX(nx), cameraSpaceY(ny)) }
+            .onFailure { Log.w(TAG, "triggerTapFocus failed", it) }
     }
 
     override fun onMarkerTap(index: Int) {
@@ -424,7 +473,7 @@ class MainActivity : Activity(), HudController.Hooks {
             toast("F${index + 1} not set — long-press to set")
             return
         }
-        engine?.focusAt(marker[0], marker[1])
+        engine?.triggerTapFocus(cameraSpaceX(marker[0]), cameraSpaceY(marker[1]))
         hud?.showTapBoxAt(marker[0], marker[1])
     }
 
@@ -471,8 +520,9 @@ class MainActivity : Activity(), HudController.Hooks {
                 contentResolver.takePersistableUriPermission(
                     uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
-            } catch (_: SecurityException) {
+            } catch (e: SecurityException) {
                 // Persistable grant not offered by the provider; the immediate read still works.
+                Log.w("M14_CINEPRO", "persistable URI grant rejected for LUT import", e)
             }
             storage?.importCubeLut(uri)
         }.onSuccess { path ->

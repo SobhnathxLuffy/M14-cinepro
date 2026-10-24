@@ -21,11 +21,18 @@ import com.m14.cinepro.core.SettingsStore
  *
  * Pure framework [AlertDialog] with a fully programmatic dark form. On Save the fields are
  * written through [SettingsStore] (which persists them and feeds the clip metadata registry
- * via RecordingController's SlateManager); [onSave] lets the caller refresh the HUD.
+ * via RecordingController's SlateManager); [onSave] lets the caller refresh the HUD. The
+ * neutral RESET ALL button wipes the settings to factory defaults ([SettingsStore.resetAll])
+ * and notifies the caller through [onResetAll] (QA Phase 4: the missing reset control).
  */
 object SlateDialog {
 
-    fun show(activity: Activity, settings: SettingsStore, onSave: () -> Unit) {
+    fun show(
+        activity: Activity,
+        settings: SettingsStore,
+        onSave: (() -> Unit)? = null,
+        onResetAll: (() -> Unit)? = null
+    ) {
         val density = activity.resources.displayMetrics.density
         fun dp(v: Float): Int = (v * density + 0.5f).toInt()
 
@@ -144,7 +151,13 @@ object SlateDialog {
                 settings.goodTake = goodTake.isChecked
                 settings.director = directorEt.text.toString().trim()
                 settings.operator = operatorEt.text.toString().trim()
-                onSave()
+                onSave?.invoke()
+                dialog.dismiss()
+            }
+            .setNeutralButton(activity.getString(R.string.btn_reset_all)) { dialog, _ ->
+                // QA Phase 4: global factory reset straight from the slate form.
+                settings.resetAll()
+                onResetAll?.invoke()
                 dialog.dismiss()
             }
             .setNegativeButton(activity.getString(R.string.slate_cancel), null)

@@ -24,9 +24,10 @@ import javax.microedition.khronos.opengles.GL10
  * M14 CinePro — the GL viewfinder renderer (stage4_shaders.md §1, §7.4, §10.2, §10.3, §10.5).
  *
  * Per frame: SurfaceTexture.updateTexImage() -> compose texMatrix = R_display · ST · EIS
- * (R_display = CP1 counter-rotation for Display.getRotation() about the texture center;
- * EIS is the right operand, applied to texcoords first) -> master program quad drawn into the
- * exact 16:9 picture rect (Models.pictureRect, centered pillar/letterbox, outside cleared
+ * (R_display = CP1/QA-Phase-2 counter-rotation for Display.getRotation() about the texture
+ * center, plus the operator 180° flip; EIS is the right operand, applied to texcoords first)
+ * -> master program quad drawn into the 16:9 picture rect (Models.pictureRect, centered
+ * pillar/letterbox, widened horizontally by the anamorphic de-squeeze factor, outside cleared
  * black) -> every Models.HISTOGRAM_INTERVAL_MS draw the graded overlay-free frame into the
  * analysis FBO and dispatch the 64-bin RGB histogram compute + readback ->
  * EngineListener.onHistogram.
@@ -36,8 +37,9 @@ import javax.microedition.khronos.opengles.GL10
  * focus_assist_effect + generated main(). All shader source is loaded from assets at runtime —
  * never duplicated in Kotlin.
  *
- * Uniform laws (§10.3): zebraThreshold = UI * Models.ZEBRA_THRESHOLD_SCALE_709 (0.93,
- * Rec.709 display profile), peakingThreshold = UI * Models.PEAKING_UI_SCALE (0.04),
+ * Uniform laws (§10.3): zebraThreshold = raw full-range float RGB threshold (QA Phase 6 —
+ * Z95 0.95 / Z90 0.90 / custom UI value; the x0.93 Rec.709 display-profile rescale is gone),
+ * peakingThreshold = UI * Models.PEAKING_UI_SCALE (0.04),
  * zebraShift marches +1.0/frame wrapping at 2*zebraWidth, luminance LUT always visible
  * (33^3, unit 3), creative LUT on unit 2 with half-voxel scale/offset, colorSpace = 0
  * (Rec.709 SDR).
@@ -222,9 +224,13 @@ class ViewfinderRenderer(
         Log.i(TAG, "M14GL onSurfaceChanged: ${width}x${height} picture=${pictureWidth}x${pictureHeight}")
     }
 
-    /** CP1 16:9 letterbox law: picture rect = largest centered 16:9 rect of the surface. */
+    /**
+     * CP1 16:9 letterbox law: picture rect = largest centered 16:9 rect of the surface,
+     * widened horizontally by the anamorphic de-squeeze factor (QA Phase 2/6). The GL viewport
+     * then stretches the full-frame quad — the vertex shader is untouched.
+     */
     private fun updatePictureRect() {
-        val rect = Models.pictureRect(outW, outH)
+        val rect = Models.pictureRect(outW, outH, settings.desqueeze.factor)
         pictureLeft = rect[0].toInt()
         pictureTop = rect[1].toInt()
         pictureWidth = rect[2].toInt()
@@ -240,6 +246,7 @@ class ViewfinderRenderer(
             } catch (t: Throwable) {
                 try {
                     Process.setThreadPriority(Process.myTid(), Process.THREAD_PRIORITY_URGENT_DISPLAY)
+                    Log.w("M14_CINEPRO", "M14GL thread priority fallback to URGENT_DISPLAY: ${t.message}")
                 } catch (ignored: Throwable) {
                 }
                 Log.w(TAG, "M14GL setThreadPriority(-19) failed: ${t.message}")
@@ -266,25 +273,36 @@ class ViewfinderRenderer(
             System.arraycopy(stMatrix, 0, stEis, 0, 16)
         }
 
-        // CP1 law: counter-rotate the SurfaceTexture transform for the current display
-        // rotation around the texture center (0.5, 0.5). The M14 sensor orientation is 90 and
-        // the ST matrix is portrait-referenced; in a landscape window the image shows rotated
-        // 90° unless the sampling coords are counter-rotated by (360 - rotation*90) % 360:
-        // 270° for ROTATION_90, 90° for ROTATION_270, 0° for ROTATION_0, 180° for ROTATION_180.
+        // CP1/QA Phase 2 law: counter-rotate the SurfaceTexture transform for the current
+        // display rotation around the texture center (0.5, 0.5). The M14 sensor orientation is
+        // 90 and the ST matrix is portrait-referenced, so the required mapping is the EXACT
+        // display angle: +90° for ROTATION_90, 270° for ROTATION_270, 0° for ROTATION_180 and
+        // 180° for ROTATION_0 (V2 applied (360 - rotation*90) % 360 -> 270° at ROTATION_90,
+        // exactly 180° upside down). settings.previewFlip180 adds a further operator 180°.
         val host = host
         val rotation = if (host != null && host.isAttachedToWindow) {
             try { host.display?.rotation ?: Surface.ROTATION_0 } catch (t: Throwable) { Surface.ROTATION_0 }
         } else {
             Surface.ROTATION_0
         }
-        if (rotation != displayRotationApplied) {
-            displayRotationApplied = rotation
-            val degrees = ((360f - rotation * 90f) % 360f + 360f) % 360f
+        // Rebuild the rotation matrix when the display rotation OR the operator flip changes.
+        val flipToken = rotation or (if (settings.previewFlip180) 0x100 else 0)
+        if (flipToken != displayRotationApplied) {
+            displayRotationApplied = flipToken
+            // QA Phase 2 proof: the ST matrix is portrait-referenced (SENSOR_ORIENTATION = 90).
+            // ROTATION_90 needs +90° (V2 applied 270° => exactly 180° upside down).
+            val baseDegrees = when (rotation) {
+                Surface.ROTATION_90 -> 90f
+                Surface.ROTATION_270 -> 270f
+                Surface.ROTATION_180 -> 0f
+                else -> 180f
+            }
+            val degrees = (baseDegrees + if (settings.previewFlip180) 180f else 0f) % 360f
             Matrix.setIdentityM(displayRotMatrix, 0)
             Matrix.translateM(displayRotMatrix, 0, 0.5f, 0.5f, 0f)
             Matrix.rotateM(displayRotMatrix, 0, degrees, 0f, 0f, 1f)
             Matrix.translateM(displayRotMatrix, 0, -0.5f, -0.5f, 0f)
-            Log.i(TAG, "M14GL display counter-rotation ${degrees.toInt()}° (rotation=$rotation)")
+            Log.i(TAG, "M14GL display counter-rotation ${degrees.toInt()}° (rotation=$rotation flip=${settings.previewFlip180})")
         }
         val rotated = tmpMatrix
         Matrix.multiplyMM(rotated, 0, displayRotMatrix, 0, stEis, 0)
@@ -444,8 +462,10 @@ class ViewfinderRenderer(
             settings.falseColorOn
         u1i("areEffectsVisible", if (effectsVisible && anyOverlay) 1 else 0)
 
-        // White balance trim (first in chain; not gated by areEffectsVisible).
-        u1i("wbTrimVisible", if (settings.wbPreset == Models.WbPreset.KELVIN) 1 else 0)
+        // White balance trim (first in chain; not gated by areEffectsVisible). Single-stage
+        // law (QA Phase 4): visible in Kelvin mode OR whenever a tint offset is active — the
+        // gains provider returns clamped (1, 1, 1) at neutral, so the trim stays neutral otherwise.
+        u1i("wbTrimVisible", if (settings.wbPreset == Models.WbPreset.KELVIN || settings.tint != 0) 1 else 0)
         val gains = wbGainsProvider?.invoke()
         if (gains != null && gains.size >= 3) {
             u3f("wbGains", gains[0], gains[1], gains[2])
@@ -492,20 +512,22 @@ class ViewfinderRenderer(
 
     /**
      * Zebra mode -> (midGreyMode, zebraThreshold).
-     *  Z95/Z90: midGreyMode 0, anchored thresholds 0.95 / 0.90 scaled by the Rec.709 display
-     *  profile factor (Models.ZEBRA_THRESHOLD_SCALE_709 = 0.93, stage4 §10.3).
+     *  QA Phase 6: raw FULL-RANGE float RGB thresholds — the x0.93 Rec.709 display-profile
+     *  factor (Models.ZEBRA_THRESHOLD_SCALE_709) is removed; that rescale made zebras fire
+     *  prematurely on non-clipping skin tones.
+     *  Z95/Z90: midGreyMode 0, anchored raw thresholds 0.95 / 0.90.
+     *  OFF / custom: the raw persisted UI threshold (value unused while zebrasVisible = 0).
      *  MID_GREY / MID_GREY_PLUS1: midGreyMode 1 / 2. The include ORs the threshold with the
      *  band condition (max()), so the threshold must be pushed above the L* domain (2.0) to
      *  kill `thresholdCondition` — otherwise step(0, L*) = 1 stripes the WHOLE frame (V1 bug,
      *  worklog flag). Only the mid-grey band stripes.
-     *  OFF / custom: the persisted UI threshold * 0.93 (values unused while visible = 0).
      */
     private fun zebraUniformParams(): Pair<Int, Float> = when (settings.zebraMode) {
-        Models.ZebraMode.Z95 -> 0 to (0.95f * Models.ZEBRA_THRESHOLD_SCALE_709)
-        Models.ZebraMode.Z90 -> 0 to (0.90f * Models.ZEBRA_THRESHOLD_SCALE_709)
+        Models.ZebraMode.Z95 -> 0 to 0.95f
+        Models.ZebraMode.Z90 -> 0 to 0.90f
         Models.ZebraMode.MID_GREY -> 1 to 2.0f
         Models.ZebraMode.MID_GREY_PLUS1 -> 2 to 2.0f
-        Models.ZebraMode.OFF -> 0 to (settings.zebraThresholdUi * Models.ZEBRA_THRESHOLD_SCALE_709)
+        Models.ZebraMode.OFF -> 0 to settings.zebraThresholdUi
     }
 
     // -----------------------------------------------------------------------------------------

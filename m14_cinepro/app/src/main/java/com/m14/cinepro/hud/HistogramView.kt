@@ -16,7 +16,8 @@ import kotlin.math.min
  * — 192 little-endian uint32 counts laid out as R=[0,64) G=[64,128) B=[128,192)
  * (see Models.HISTOGRAM_BINS, computed at 10 fps by histogram_compute.glsl).
  *
- * Render: 64 vertical bars with 2 px gaps; the R, G and B channel columns are overlaid with
+ * Render: 64 vertical bars (the gap shrinks adaptively on narrow scopes — QA Phase 6B5 — so
+ * the bars can never collapse to zero width); the R, G and B channel columns are overlaid with
  * alpha (screen-style additive look), each normalized against the global max so channel
  * relationships stay readable. Backing is semi-transparent dark cinema panels.
  */
@@ -73,8 +74,14 @@ class HistogramView(context: Context) : View(context) {
         if (innerW <= 0f || innerH <= 0f) return
 
         val barCount = Models.HISTOGRAM_BINS
-        val barW = (innerW - gapPx * (barCount - 1)) / barCount
-        if (barW <= 0f) return
+        // QA Phase 6: narrow views must never produce barW <= 0 — shrink the gap, then the bins.
+        var gap = gapPx
+        if (gap >= innerW / barCount) gap = 0.5f * resources.displayMetrics.density
+        var barW = (innerW - gap * (barCount - 1)) / barCount
+        if (barW <= 0f) {
+            gap = 0f
+            barW = innerW / barCount
+        }
 
         val maxCount: Int = synchronized(bins) {
             var m = 1
@@ -87,7 +94,7 @@ class HistogramView(context: Context) : View(context) {
 
         synchronized(bins) {
             for (i in 0 until barCount) {
-                val x = padPx + i * (barW + gapPx)
+                val x = padPx + i * (barW + gap)
                 val r = bins[i] / maxF
                 val g = bins[barCount + i] / maxF
                 val b = bins[barCount * 2 + i] / maxF
