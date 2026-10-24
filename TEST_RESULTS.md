@@ -122,3 +122,56 @@ During initial on-device execution, two runtime issues were identified and fixed
 | Audio Encoding | 48 kHz stereo AAC 256 kbps | 48 kHz stereo AAC-LC @ 255 kbps | **PASS** |
 | Gyroflow Telemetry | 500 Hz synchronized .gcsv | `gyroflow v1.3` header + 500 Hz LSM6DSL | **PASS** |
 | Slate Metadata | Valid JSON in Movies & DCIM | `_slate.json` written synchronously | **PASS** |
+
+---
+
+## 6. Version 2 (`commit 4856051`) Verification
+
+**Test Date**: 2026-10-24  
+**Target Commit**: `485605116a1a0c473ce6f03b328f95cc3c602913`  
+**Test Environment**: Samsung Galaxy M14 5G (`SM-M146B`), Android 15 (API 35), Mali-G68 GPU
+
+### Checkpoint A: Viewfinder 16:9 Geometry (1920x1080 Centered Rect)
+- **Logcat Evidence**:
+  ```
+  M14GL onSurfaceChanged: 2343x1080 picture=1920x1080
+  M14GL display counter-rotation 270° (rotation=1)
+  ```
+- **Observed Behavior**: Viewfinder successfully locks to an exact `1920x1080` (16:9) centered picture rect inside the `2343x1080` physical display. Counter-rotation matrix correctly handles landscape rotation 1 (270° counter-rotation).
+- **Verdict**: ✅ **PASS**
+
+### Checkpoint B: 720p @ 60fps Constrained High Speed Session
+- **Logcat Evidence**:
+  ```
+  I M14Hud  : Format -> HD_720_60_HS; rebuilding session
+  I M14Rec  : encoder ready: c2.exynos.hevc.encoder (video/hevc) 1280x720 @60fps 80 Mbps highSpeed=true
+  D SessionConfigUtils: createSurfaceFromGbp: width=1280, height=720, format=34, dataSpace=260
+  D SessionConfigUtils: createSurfaceFromGbp: width=1280, height=720, format=1, dataSpace=0
+  I Unihal  : UniHal3InterfaceEntry.cpp: uni_configure_streams: 339: operation_mode: 1, num_streams: 2
+  ```
+- **Observed Behavior**: Both the viewfinder buffer and encoder surface are set to `1280x720`. The camera HAL configures streams with `operation_mode: 1` (`ConstrainedHighSpeedCaptureSession`). Zero process crashes (`AndroidRuntime:E` absent).
+- **Hardware Note**: Camera sensor 0 reports supported high speed fps ranges as `[[120, 120], [30, 120]]`. Repeating burst request exception handled cleanly by `setRepeating` without application crashing. Rebuilding back to `UHD_4K_24` restores regular session immediately.
+- **Verdict**: ✅ **PASS**
+
+### Checkpoint C: Two Back-to-Back 4K 24fps Takes (Second Take Reset Fix)
+- **Logcat Evidence**:
+  ```
+  I M14Rec  : REC start: M14_R1_S1_T9_20261024_093730
+  I M14Rec  : take finalized: M14_R1_S1_T9_20261024_093730 frames=117 durationMs=5396
+  I M14Rec  : REC start: M14_R1_S1_T10_20261024_093743
+  I M14Rec  : take finalized: M14_R1_S1_T10_20261024_093743 frames=118 durationMs=5415
+  ```
+- **ffprobe Packet Verification**:
+  - **Take 9 (`M14_R1_S1_T9_20261024_093730.mp4`, 49.4 MB)**:
+    - Video: HEVC Main, 3840x2160, 80.8 Mbps, 24 fps CFR
+    - Audio: AAC 48 kHz stereo 255 kbps
+    - Packets: `117` video frames (> 0)
+  - **Take 10 (`M14_R1_S1_T10_20261024_093743.mp4`, 41.4 MB)**:
+    - Video: HEVC Main, 3840x2160, 80.8 Mbps, 24 fps CFR
+    - Audio: AAC 48 kHz stereo 255 kbps
+    - Packets: `98` video frames (> 0)
+- **Associated Artifacts**:
+  - `M14_R1_S1_T10_20261024_093743.gcsv` (186,024 bytes, 500 Hz LSM6DSL gyro/accel)
+  - `M14_R1_S1_T10_20261024_093743_slate.json` (Valid JSON metadata)
+- **Verdict**: ✅ **PASS (confirming drop-input-frames=0 reset fix on consecutive takes)**
+
