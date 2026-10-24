@@ -44,8 +44,8 @@
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
             android:resizeableActivity="false"
             android:launchMode="singleTask"
-            android:showWhenLocked="false"
-            android:turnScreenOn="false">
+            android:showWhenLocked="true"
+            android:turnScreenOn="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

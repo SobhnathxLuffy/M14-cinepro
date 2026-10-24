@@ -17,8 +17,9 @@ import kotlin.math.sqrt
  *      v_p(T) = (4.20481691e-8·T² + 4.22806245e-5·T + 0.317398726) / (1.61456053e-7·T² − 2.89741816e-5·T + 1.0)
  *  - CIE 1960 -> CIE 1931: x = 3u/(2u−8v+4), y = 2v/(2u−8v+4); white X = x/y, Z = (1−x−y)/y.
  *  - XYZ -> linear Rec.709 via the exact sRGB/Rec.709 matrix (Y normalized to 1).
- *  - Tint = green-gain offset around the geometric mean: gG = sqrt(gR·gB)·e^(−(tint+130)/200),
- *    deviceTintOffset = −130 (hard-coded JNI arg in the ground truth).
+ *  - Tint = green-gain offset around the geometric mean: gG = sqrt(gR·gB)·e^(−tint/100)
+ *    (QA Phase 4: the Blackmagic deviceTintOffset = −130 is REMOVED — on the Samsung S5KJN1
+ *    sensor it halved green at neutral tint and inflated red/blue by 1.92x).
  *  - Gains normalized so min(gR,gG,gB) >= 1.
  *  - 10-iteration mired refinement loop (98% error correction, mired clamped [40,1000]).
  *  - Reverse CCT: golden-section search, 30 iterations, invphi = 0.618033988749895, mired [40,1000],
@@ -32,7 +33,16 @@ object ColorScience {
     private const val MIRED_MIN = 40.0
     private const val MIRED_MAX = 1000.0
     private const val GREEN_BASELINE = 0.72f
-    const val DEVICE_TINT_OFFSET = -130.0f
+
+    /** Kelvin reference for the relative shader gains: the M14 ISP daylight lock is 5600 K. */
+    const val REFERENCE_KELVIN = 5600
+
+    /** Shader tint trim divisor (QA Phase 4 law): gGain = exp(−tint/150), gentle + symmetric. */
+    private const val TINT_SHADER_DIVISOR = 150.0f
+
+    /** Hard clamp for every shader wbGain channel (QA Phase 4: viewfinder can never go black/neon). */
+    const val SHADER_GAIN_MIN = 0.60f
+    const val SHADER_GAIN_MAX = 1.60f
 
     /** Identity 3x3 CCM (row-major), used when the HAL has not published a measured matrix. */
     fun identityCcm(): FloatArray = floatArrayOf(
@@ -82,7 +92,7 @@ object ColorScience {
      */
     fun kelvinToRggb(kelvin: Int, tint: Int, ccm: FloatArray): RggbChannelVector? {
         val inv = inverse3x3(ccm)
-        val fExp = exp(-((tint - DEVICE_TINT_OFFSET) / 200.0f)).toFloat()
+        val fExp = exp(-(tint / 100.0f)).toFloat()
         val targetMired = 1_000_000.0 / kelvin
         var mired = targetMired
         var gR = 1f
@@ -135,6 +145,40 @@ object ColorScience {
         }
     }
 
+    /**
+     * Relative Kelvin shader gains (QA Phase 4 law): the hardware ISP is locked to
+     * CONTROL_AWB_MODE_DAYLIGHT (5600 K reference), so the GL trim only has to supply the
+     * difference between the requested Kelvin/Tint and the 5600 K reference white point.
+     * 5600 K + tint 0 produces EXACTLY (1, 1, 1). NaN/infinite denominators degrade to unity
+     * and every channel is clamped to [SHADER_GAIN_MIN, SHADER_GAIN_MAX].
+     */
+    fun kelvinShaderGainsRelative(kelvin: Int, tint: Int, ccm: FloatArray): FloatArray {
+        val safeKelvin = kelvin.coerceIn(2500, 10000)
+        val safeTint = tint.coerceIn(-50, 50)
+        if (safeKelvin == REFERENCE_KELVIN && safeTint == 0) return floatArrayOf(1f, 1f, 1f)
+        val ref = kelvinToNormalizedRgbGains(REFERENCE_KELVIN, 0, ccm)
+        val tgt = kelvinToNormalizedRgbGains(safeKelvin, safeTint, ccm)
+        return FloatArray(3) { i ->
+            val denom = ref[i]
+            val ratio = if (denom.isNaN() || denom.isInfinite() || denom <= 1e-6f) 1f else tgt[i] / denom
+            when {
+                ratio.isNaN() || ratio.isInfinite() -> 1f
+                else -> ratio.coerceIn(SHADER_GAIN_MIN, SHADER_GAIN_MAX)
+            }
+        }
+    }
+
+    /**
+     * Gentle symmetric green-magenta shader trim for the AWB presets (QA Phase 4 law):
+     * only applied when tint != 0 — gGain = exp(−tint/150), clamped to [0.75, 1.30].
+     * Positive tint = magenta (green reduced), negative = green boost.
+     */
+    fun tintShaderGain(tint: Int): Float {
+        val safe = tint.coerceIn(-50, 50).toFloat()
+        val g = exp(-(safe / TINT_SHADER_DIVISOR))
+        return if (g.isNaN() || g.isInfinite()) 1f else g.coerceIn(0.75f, 1.30f)
+    }
+
     // -------------------------------------------------------------------------------------
     // REVERSE: (gains, ccm) -> (kelvin, tint)   (dt0.e + dt0.b)
     // -------------------------------------------------------------------------------------
@@ -181,9 +225,8 @@ object ColorScience {
         var tint = 0
         if (gains.red > 0f && gains.blue > 0f && gains.greenEven > 0f) {
             val ratio = greenMean / sqrt(gains.blue * gains.red).toDouble()
-            // Exact ground-truth formula: tint = clamp((int)(−ln(gG/√(gR·gB))·200) − 130, −50, +50)
-            tint = ((-ln(ratio).toFloat() * 200.0f).toInt() - 130)
-                .coerceIn(-50, 50)
+            // QA Phase 4: the −130 device offset is gone — symmetric tint read-back only.
+            tint = ((-ln(ratio).toFloat() * 200.0f).toInt()).coerceIn(-50, 50)
         }
         return Pair(kelvin, tint)
     }

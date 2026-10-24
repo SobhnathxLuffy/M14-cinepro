@@ -29,6 +29,24 @@
     <string name="btn_torch">TORCH</string>
     <string name="btn_lock">A/AF LOCK</string>
 
+    <!-- V3 additions (QA_FAILURE_REPORT remediation) -->
+    <string name="btn_zoom">ZOOM</string>
+    <string name="btn_media">MEDIA</string>
+    <string name="btn_reset">&#x21BA; RESET</string>
+    <string name="btn_reset_all">RESET ALL</string>
+    <string name="btn_flip">180&#xB0; FLIP</string>
+    <string name="btn_rack_zoom">RACK 1.5s</string>
+    <string name="media_pool_title">Media Pool</string>
+    <string name="media_pool_empty">No clips yet — recordings land in Movies/M14_CinePro</string>
+    <string name="media_pool_play">PLAY</string>
+    <string name="media_pool_pause">PAUSE</string>
+    <string name="media_pool_delete">DELETE</string>
+    <string name="media_pool_share">SHARE</string>
+    <string name="media_pool_slate">SLATE JSON</string>
+    <string name="media_pool_good_take">&#x2605 GOOD TAKE</string>
+    <string name="media_pool_deleted">Clip deleted</string>
+    <string name="media_pool_delete_confirm">Delete this clip permanently?</string>
+
     <!-- Slate dialog -->
     <string name="slate_title">Cinema Slate</string>
     <string name="slate_reel">Reel</string>

@@ -132,6 +132,14 @@ object Models {
     /** The viewfinder picture is always exact 16:9 (CP1 law). */
     const val PICTURE_ASPECT = 16f / 9f
 
+    /** Digital zoom law (QA Phase 6): Camera 0 CONTROL_ZOOM_RATIO range 1.0x..8.0x, 26 mm equiv. */
+    const val ZOOM_MIN = 1.0f
+    const val ZOOM_MAX = 8.0f
+    const val ZOOM_DEFAULT = 1.0f
+    const val FOCAL_EQUIV_MM = 26
+    /** Servo rack-zoom sweep duration (QA Phase 6). */
+    const val RACK_ZOOM_MS = 1500L
+
     /**
      * CP1 16:9 viewport-lock law: the viewfinder picture is the largest centered 16:9 rect
      * inside a [screenW] x [screenH] window (e.g. 1920x1080 centered inside 2343x1080),
@@ -140,19 +148,40 @@ object Models {
      * (view-space, y origin top-left).
      * @return floatArrayOf(left, top, width, height)
      */
-    fun pictureRect(screenW: Int, screenH: Int): FloatArray {
+    fun pictureRect(screenW: Int, screenH: Int): FloatArray = pictureRect(screenW, screenH, 1f)
+
+    /**
+     * Anamorphic de-squeeze variant (QA Phase 2): with an active factor the 16:9 picture is
+     * stretched horizontally by [desqueezeFactor] (stage4 §9) — the picture rect widens around
+     * its vertical center, clamped to the window. The height never changes (de-squeeze is a
+     * horizontal-only transform).
+     */
+    fun pictureRect(screenW: Int, screenH: Int, desqueezeFactor: Float): FloatArray {
+        val base = pictureRect(screenW, screenH)
+        val f = if (desqueezeFactor.isNaN() || desqueezeFactor.isInfinite()) 1f
+        else desqueezeFactor.coerceAtLeast(1f)
+        if (f <= 1f) return base
         val w = screenW.coerceAtLeast(1)
-        val h = screenH.coerceAtLeast(1)
-        var pw = w.toFloat()
-        var ph = pw / PICTURE_ASPECT
-        if (ph > h) {
-            ph = h.toFloat()
-            pw = ph * PICTURE_ASPECT
-        }
+        var pw = base[2] * f
+        if (pw > w) pw = w.toFloat()
         val left = (w - pw) * 0.5f
-        val top = (h - ph) * 0.5f
-        return floatArrayOf(left, top, pw, ph)
+        return floatArrayOf(left, base[1], pw, base[3])
     }
+
+    /**
+     * Standard 1/3-stop cinema ISO ladder (QA Phase 6): 100..3200.
+     * Sliders index this array; the value is never interpolated.
+     */
+    fun isoStops(): FloatArray = floatArrayOf(
+        100f, 125f, 160f, 200f, 250f, 320f, 400f, 500f,
+        640f, 800f, 1000f, 1250f, 1600f, 2000f, 2500f, 3200f
+    )
+
+    /** Perceptually uniform Kelvin slider law (QA Phase 6): slider lives in mired space. */
+    fun miredFromKelvin(kelvin: Int): Int = 1_000_000 / kelvin.coerceIn(KELVIN_MIN, KELVIN_MAX)
+    fun kelvinFromMired(mired: Int): Int = (1_000_000 / mired.coerceIn(100, 400)).coerceIn(KELVIN_MIN, KELVIN_MAX)
+    fun miredMin(): Int = miredFromKelvin(KELVIN_MAX)
+    fun miredMax(): Int = miredFromKelvin(KELVIN_MIN)
 
     /** Gyro-EIS crop: 10% in (0.9 scale) for counter-rotation headroom. */
     const val EIS_CROP_SCALE = 0.9f
@@ -271,6 +300,21 @@ class SettingsStore(context: Context) {
     @Volatile var desqueeze: Models.DesqueezePreset = Models.DesqueezePreset.X100
         set(v) { field = v; persist("desqueeze", v.name) }
 
+    // ---- Digital zoom + preview flip (QA Phase 1/6) ----
+    /** CONTROL_ZOOM_RATIO 1.0x..8.0x; setter clamps so a corrupted pref can never wedge the HAL. */
+    @Volatile var zoomRatio: Float = Models.ZOOM_DEFAULT
+        set(v) {
+            val clamped = if (v.isNaN() || v.isInfinite()) Models.ZOOM_DEFAULT
+            else v.coerceIn(Models.ZOOM_MIN, Models.ZOOM_MAX)
+            field = clamped; persistFloat("zoomRatio", clamped)
+        }
+    /** Operator 180° preview flip (rig / DOF adapter); rotates the GL counter-rotation. */
+    @Volatile var previewFlip180: Boolean = false
+        set(v) { field = v; persist("previewFlip180", v) }
+    /** Smooth 1.5 s servo rack-zoom for the focal-length chips (QA Phase 6). */
+    @Volatile var rackZoomOn: Boolean = false
+        set(v) { field = v; persist("rackZoomOn", v) }
+
     // ---- Transport ----
     @Volatile var eisOn: Boolean = false
         set(v) { field = v; persist("eisOn", v) }
@@ -380,6 +424,71 @@ class SettingsStore(context: Context) {
         take = prefs.getInt("take", 1)
         director = str("director", "")
         operator = str("operator", "")
+        zoomRatio = prefs.getFloat("zoomRatio", Models.ZOOM_DEFAULT)
+        previewFlip180 = prefs.getBoolean("previewFlip180", false)
+        rackZoomOn = prefs.getBoolean("rackZoomOn", false)
+        sanitize()
+    }
+
+    /**
+     * Corrupted-settings recovery (QA Phase 4): every numeric is coerced back into its legal
+     * range; out-of-range values are written back sanitized because each setter persists.
+     */
+    private fun sanitize() {
+        shutterAngleDeg = shutterAngleDeg.coerceIn(45f, 360f)
+        shutterSpeedDenominator = shutterSpeedDenominator.coerceIn(1, 8000)
+        iso = iso.coerceIn(Models.ISO_MIN, Models.ISO_MAX)
+        evCompensation = evCompensation.coerceIn(Models.EV_MIN, Models.EV_MAX)
+        kelvin = kelvin.coerceIn(Models.KELVIN_MIN, Models.KELVIN_MAX)
+        tint = tint.coerceIn(Models.TINT_MIN, Models.TINT_MAX)
+        peakingStrength = peakingStrength.coerceIn(0f, 1f)
+        zebraThresholdUi = zebraThresholdUi.coerceIn(0.75f, 1.0f)
+        zoomRatio = zoomRatio
+        reel = reel.coerceAtLeast(1)
+        take = take.coerceAtLeast(1)
+        if (importedLutPath?.isBlank() == true) importedLutPath = null
+    }
+
+    /**
+     * Factory reset (QA Phase 4): wipes m14_cinepro_settings.xml and restores every in-memory
+     * field to its default. Callers must rebuild the session + GL uniforms afterwards.
+     */
+    fun resetAll() {
+        prefs.edit().clear().commit()
+        focusMarkers[0] = null
+        focusMarkers[1] = null
+        focusMarkers[2] = null
+        resolution = Models.ResPreset.UHD_4K_24
+        bitrate = Models.BitratePreset.M80
+        shutterMode = Models.ShutterMode.ANGLE
+        shutterAngleDeg = 180f
+        shutterSpeedDenominator = 48
+        iso = 100
+        manualExposure = false
+        evCompensation = 0f
+        aeLock = false
+        antiBanding = Models.AntiBandingMode.AUTO
+        wbPreset = Models.WbPreset.AUTO
+        kelvin = 5600
+        tint = 0
+        awbLock = false
+        peakingMode = Models.PeakingMode.OFF
+        peakingStrength = Models.PEAKING_DEFAULT_UI
+        peakingColor = Models.PeakingColor.RED
+        zebraMode = Models.ZebraMode.OFF
+        zebraThresholdUi = Models.ZEBRA_DEFAULT_UI_THRESHOLD
+        falseColorOn = false
+        lutPreset = Models.LutPreset.OFF
+        importedLutPath = null
+        guide = Models.GuidePreset.OFF
+        grid = Models.GridOverlay.NONE
+        desqueeze = Models.DesqueezePreset.X100
+        eisOn = false
+        torchOn = false
+        zoomRatio = Models.ZOOM_DEFAULT
+        previewFlip180 = false
+        rackZoomOn = false
+        sceneFlicker = 0
     }
 
     /** Persist F-marker positions (normalized 0..1 x/y, or null to clear). */
