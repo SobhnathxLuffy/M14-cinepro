@@ -43,7 +43,7 @@ import java.util.Locale
 class MainActivity : Activity(), HudController.Hooks {
 
     companion object {
-        private const val TAG = "M14Hud"
+        private const val TAG = "M14_CINEPRO"
         private const val REQ_PERMISSIONS = 1001
         private const val REQ_LUT_IMPORT = 1002
         private const val TICK_MS = 100L
@@ -126,13 +126,20 @@ class MainActivity : Activity(), HudController.Hooks {
         tickRunnable = null
         systemMonitor?.stop()
         systemMonitor = null
+        // R2-M10: deterministic GL teardown (was never wired — cleanup relied on EGL context death).
+        runCatching { glView?.releaseViewfinder() }
+            .onFailure { Log.w(TAG, "releaseViewfinder failed", it) }
         runCatching { engine?.close() }
+            .onFailure { Log.w(TAG, "engine close failed", it) }
         engine = null
         runCatching { recController?.releaseEncoder() }
+            .onFailure { Log.w(TAG, "releaseEncoder failed", it) }
         runCatching { recController?.audioEngine?.stopMeteringOnly() }
+            .onFailure { Log.w(TAG, "stopMeteringOnly failed", it) }
         recController = null
         gyroEis?.setEnabled(false)
         gyroEis = null
+        glView = null
         hud?.destroy()
         hud = null
         sessionReady = false
@@ -285,9 +292,15 @@ class MainActivity : Activity(), HudController.Hooks {
         }
         sessionReady = false
         val p = settings.resolution
+        // R2-H3 companion: when the engine is in the HS->regular fallback, arm the encoder for
+        // the 30 fps regular capture timeline instead of the preset's HS timeline. (createSession
+        // clears the flag for its retry-from-scratch law; the createSession callback below covers
+        // whichever way the retry lands.)
+        val fallback = e.isHsFallback()
+        val effFps = if (fallback) minOf(p.fps, 30) else p.fps
         // ALWAYS prepare the record surface up front (record-ready pipeline, Architecture A).
         val recordSurface = recController?.prepareEncoder(
-            p.width, p.height, p.fps, settings.bitrate.bps, p.highSpeed
+            p.width, p.height, effFps, settings.bitrate.bps, p.highSpeed && !fallback
         ) ?: run {
             hud?.setStatus("ENCODER PREP FAILED")
             return
@@ -296,7 +309,13 @@ class MainActivity : Activity(), HudController.Hooks {
             sessionReady = ok
             if (ok) {
                 e.applySettings()
-                hud?.setStatus("Ready")
+                if (e.isHsFallback()) {
+                    // Retry landed as regular again — keep the encoder timeline honest.
+                    recController?.setEffectiveFps(minOf(p.fps, 30))
+                    hud?.setStatus("HS FALLBACK ${minOf(p.fps, 30)}FPS")
+                } else {
+                    hud?.setStatus("Ready")
+                }
             } else {
                 hud?.setStatus("SESSION FAILED")
                 Log.e(TAG, "Camera session configuration failed")
@@ -348,6 +367,15 @@ class MainActivity : Activity(), HudController.Hooks {
         }
 
         override fun onInfo(message: String) {
+            // R2-H3: the engine degraded an HS session to a regular one — the encoder timeline was
+            // stamped for the preset fps (60), so re-stamp the CFR timeline to the 30 fps capture
+            // rate, or the take would play 2x fast with desyncing audio.
+            if (message == "hs_fallback") {
+                val eff = minOf(settings.resolution.fps, 30)
+                recController?.setEffectiveFps(eff)
+                hud?.setStatus("HS FALLBACK ${eff}FPS")
+                return
+            }
             hud?.setStatus(message)
         }
 
@@ -390,6 +418,7 @@ class MainActivity : Activity(), HudController.Hooks {
                 return
             }
             val base = runCatching { rec.slateManager.clipBaseName() }
+                .onFailure { Log.w(TAG, "clipBaseName lookup failed — using default", it) }
                 .getOrDefault("M14_A001_C001")
             runCatching { rec.startRecording(base) }
                 .onFailure {
@@ -419,6 +448,7 @@ class MainActivity : Activity(), HudController.Hooks {
     override fun onResetAll() {
         if (recController?.isRecording() == true) {
             runCatching { recController?.stopRecording() }
+                .onFailure { Log.w(TAG, "stopRecording before RESET ALL failed", it) }
             hud?.setRecording(false, false)
         }
         settings.resetAll()

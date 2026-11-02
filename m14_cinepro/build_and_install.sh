@@ -105,7 +105,12 @@ echo "Keystore OK: $KEYSTORE"
 log "Building APK (assemble$BUILD_VARIANT)"
 "$GRADLE_CMD" --no-daemon "assemble$BUILD_VARIANT"
 
-APK="app/build/outputs/apk/$BUILD_VARIANT/app-$BUILD_VARIANT.apk"
+# R2-L24: unsigned release builds are named app-release-unsigned.apk (no signingConfig).
+if [ "$BUILD_VARIANT" = "release" ] && [ ! -f "app/build/outputs/apk/release/app-release.apk" ]; then
+    APK="app/build/outputs/apk/release/app-release-unsigned.apk"
+else
+    APK="app/build/outputs/apk/$BUILD_VARIANT/app-$BUILD_VARIANT.apk"
+fi
 if [ ! -f "$APK" ]; then
   echo "ERROR: expected APK not found at $APK" >&2
   exit 1

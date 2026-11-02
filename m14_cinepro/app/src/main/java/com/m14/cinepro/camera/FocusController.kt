@@ -9,7 +9,7 @@ import android.util.Log
 import com.m14.cinepro.core.Models
 import com.m14.cinepro.core.SettingsStore
 
-private const val TAG = "M14Cam"
+private const val TAG = "M14_CINEPRO"
 
 /** Tap/marker metering weight — 0x3e8 law (stage3_camera2.md §2.6, ah0.e). */
 private const val METERING_WEIGHT = 1000
@@ -55,7 +55,7 @@ class FocusController(private val settings: SettingsStore) {
 
     @Volatile private var phase = Phase.CONTINUOUS
     @Volatile private var tapRegions: Array<MeteringRectangle>? = null
-    private var tapStartedAtMs = 0L
+    @Volatile private var tapStartedAtMs = 0L  // R2-L9: @Volatile to match phase/tapRegions
 
     /**
      * Map a viewfinder tap (normalized in the upright, display-rotated viewfinder, y down) into a
@@ -154,6 +154,8 @@ class FocusController(private val settings: SettingsStore) {
     /**
      * Explicit reset to continuous autofocus: AF_MODE_CONTINUOUS_PICTURE, AF_TRIGGER_IDLE and the
      * zero-weight sentinel region. Internal state is reset too, so the next [apply] keeps CAF.
+     * R2-L3: currently no caller (CAF restore happens inside [apply]'s expiry paths); kept as
+     * public API for an explicit unlock gesture — it shares the AE-clear law below.
      */
     fun restoreContinuous(builder: CaptureRequest.Builder) {
         phase = Phase.CONTINUOUS
@@ -161,6 +163,8 @@ class FocusController(private val settings: SettingsStore) {
         builder.guardedSet(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
         builder.guardedSet(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
         builder.guardedSet(CaptureRequest.CONTROL_AF_REGIONS, ZERO_REGION)
+        // R2-L2: clear the AE ROI as well — a stale tap ROI must not pin AE weighting forever.
+        if (!settings.manualExposure) builder.guardedSet(CaptureRequest.CONTROL_AE_REGIONS, ZERO_REGION)
         builder.guardedSet(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER, CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
     }
 
@@ -250,6 +254,8 @@ class FocusController(private val settings: SettingsStore) {
             if (!settings.manualExposure) builder.guardedSet(CaptureRequest.CONTROL_AE_REGIONS, regions)
         } else {
             builder.guardedSet(CaptureRequest.CONTROL_AF_REGIONS, ZERO_REGION)
+            // R2-L2: clear the AE ROI too — the file law says ZERO_REGION clears AF/AE regions.
+            if (!settings.manualExposure) builder.guardedSet(CaptureRequest.CONTROL_AE_REGIONS, ZERO_REGION)
         }
     }
 

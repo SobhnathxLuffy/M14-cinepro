@@ -26,7 +26,7 @@ import java.nio.ByteOrder
 class HistogramEngine(private val context: Context) {
 
     companion object {
-        private const val TAG = "M14GL"
+        private const val TAG = "M14_CINEPRO"
 
         /** 64 bins x 3 channels x 4 bytes = 768. */
         private const val SSBO_BYTES = Models.HISTOGRAM_BINS * 3 * 4

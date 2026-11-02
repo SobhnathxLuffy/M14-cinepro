@@ -52,7 +52,7 @@ class AudioEngine(
     }
 
     companion object {
-        private const val TAG = "M14Audio"
+        private const val TAG = "M14_CINEPRO"
         private const val MIME_AAC = "audio/mp4a-latm"
         private const val AAC_OBJECT_LC = 2
         private const val READ_FRAMES = 512
@@ -310,7 +310,10 @@ class AudioEngine(
                     notifyError(RuntimeException("AudioRecord read failing persistently (last n=$n)"))
                     break
                 }
-                try { Thread.sleep(10) } catch (e: InterruptedException) { break }
+                try { Thread.sleep(10) } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()  // R2-L11: preserve the interrupt status
+                    break
+                }
                 continue
             }
             badReads = 0
@@ -320,9 +323,16 @@ class AudioEngine(
                 computeMeters(buf, frames)
                 maybeEmitLevels()
                 if (mode == Mode.RECORDING) {
-                    val pts = currentPtsUs()
+                    // R2-M7: stamp the chunk at its FIRST frame's time — currentPtsUs() evaluated
+                    // after the blocking read returns is systematically ~1 chunk (10.7 ms) late,
+                    // which biased the muxed audio late against the camera-timestamped video.
+                    val pts = currentPtsUs() - frames * 1_000_000L / Models.AUDIO_SAMPLE_RATE
                     pcmQueue.offer(Chunk(buf.copyOf(frames * 2), pts))
-                    if (pcmQueue.size > MAX_PCM_QUEUE) pcmQueue.poll()
+                    if (pcmQueue.size > MAX_PCM_QUEUE) {
+                        // R2-L11: the oldest ~10.7 ms drop was completely silent before.
+                        Log.w(TAG, "pcm queue overflow — dropping oldest chunk")
+                        pcmQueue.poll()
+                    }
                     encodeHandler?.post { drainInputs() }
                 }
             }
@@ -469,9 +479,14 @@ class AudioEngine(
                     mc.queueInputBuffer(index, 0, chunk.pcm.size * 2, chunk.ptsUs, 0)
                 } else {
                     Log.w(TAG, "getInputBuffer($index) returned null")
+                    // R2-L10: the index was never queued — hand it back or the encoder starves.
+                    freeInputs.add(index)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "queueInputBuffer failed", e)
+                // R2-L10: the buffer was never queued — return the index to the free pool so
+                // repeated transient failures cannot silently starve the AAC encoder.
+                freeInputs.add(index)
             }
         }
         if (mode == Mode.RECORDING && freeInputs.isNotEmpty() && pcmQueue.isEmpty()) {

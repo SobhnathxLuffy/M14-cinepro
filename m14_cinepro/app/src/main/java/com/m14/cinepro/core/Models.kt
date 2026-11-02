@@ -28,7 +28,7 @@ object Models {
         QHD_25K_30(2560, 1440, 30, "2.5K 30", false),
         FHD_1080_24(1920, 1080, 24, "1080p 24", false),
         FHD_1080_30(1920, 1080, 30, "1080p 30", false),
-        HD_720_60_HS(1280, 720, 60, "720p 60 Slow-Mo", true)
+        HD_720_60_HS(1280, 720, 60, "720p 60 HS (120 cap)", true)
     }
 
     /** Bitrate selector (stage5_media.md §2.4; Exynos MFC max verified 81 Mbps at 4K). */
@@ -117,8 +117,6 @@ object Models {
     const val EV_MIN = -2.0f
     const val EV_MAX = 2.0f
 
-    /** Zebra threshold display-profile scale (stage4 §10.3: x0.93 for Rec.709 display). */
-    const val ZEBRA_THRESHOLD_SCALE_709 = 0.93f
     /** Peaking strength UI -> shader scale (stage4 §10.3: peakingThreshold = UI * 0.04). */
     const val PEAKING_UI_SCALE = 0.04f
     const val PEAKING_DEFAULT_UI = 0.85f
@@ -151,10 +149,13 @@ object Models {
     fun pictureRect(screenW: Int, screenH: Int): FloatArray = pictureRect(screenW, screenH, 1f)
 
     /**
-     * Anamorphic de-squeeze variant (QA Phase 2): with an active factor the 16:9 picture is
-     * stretched horizontally by [desqueezeFactor] (stage4 §9) — the picture rect widens around
-     * its vertical center, clamped to the window. The height never changes (de-squeeze is a
-     * horizontal-only transform).
+     * Anamorphic de-squeeze variant (QA Phase 2 / Round-2 R2-H5): with an active factor the 16:9
+     * picture is stretched horizontally by [desqueezeFactor] (stage4 §9). When the widened width
+     * exceeds the window the height is scaled by the SAME ratio (uniform fit), so the displayed
+     * picture aspect is exactly 16:9 x f (1.33x -> 2.37:1, 1.55x, 2.0x all distinguishable) with
+     * square pixels — the overflow letterboxes top/bottom. The old width-only clamp saturated
+     * every preset at the same 1.22x on the 2343x1080 M14 panel (and was a no-op in portrait).
+     * @return floatArrayOf(left, top, width, height)
      */
     fun pictureRect(screenW: Int, screenH: Int, desqueezeFactor: Float): FloatArray {
         val w = screenW.coerceAtLeast(1)
@@ -165,13 +166,16 @@ object Models {
             pw = w.toFloat()
             ph = pw / PICTURE_ASPECT
         }
-        val top = (h - ph) * 0.5f
         val f = if (desqueezeFactor.isNaN() || desqueezeFactor.isInfinite()) 1f
         else desqueezeFactor.coerceAtLeast(1f)
-        if (f <= 1f) return floatArrayOf((w - pw) * 0.5f, top, pw, ph)
+        if (f <= 1f) return floatArrayOf((w - pw) * 0.5f, (h - ph) * 0.5f, pw, ph)
         var sw = pw * f
-        if (sw > w) sw = w.toFloat()
-        return floatArrayOf((w - sw) * 0.5f, top, sw, ph)
+        var sh = ph
+        if (sw > w) {
+            sh = ph * (w / sw)
+            sw = w.toFloat()
+        }
+        return floatArrayOf((w - sw) * 0.5f, (h - sh) * 0.5f, sw, sh)
     }
 
     /**
@@ -231,7 +235,7 @@ object Models {
         val s = (totalSeconds % 60).toInt()
         val m = ((totalSeconds / 60) % 60).toInt()
         val h = totalSeconds / 3600
-        return String.format("%02d:%02d:%02d:%02d", h, m, s, f)
+        return String.format(java.util.Locale.US, "%02d:%02d:%02d:%02d", h, m, s, f)
     }
 }
 
@@ -358,7 +362,7 @@ class SettingsStore(context: Context) {
 
     /** Shutter display string for the HUD pill. */
     fun shutterLabel(): String = when (shutterMode) {
-        Models.ShutterMode.ANGLE -> String.format("%.1f°", shutterAngleDeg)
+        Models.ShutterMode.ANGLE -> String.format(java.util.Locale.US, "%.1f°", shutterAngleDeg)
         Models.ShutterMode.SPEED -> "1/$shutterSpeedDenominator s"
     }
 
@@ -439,15 +443,24 @@ class SettingsStore(context: Context) {
     /**
      * Corrupted-settings recovery (QA Phase 4): every numeric is coerced back into its legal
      * range; out-of-range values are written back sanitized because each setter persists.
+     * R2-M14: NaN/Inf no longer slips through `coerceIn` (comparison-based — both comparisons
+     * are false for NaN) — each float falls back to its default, and the shutter-speed
+     * denominator is validated against the legal ladder, not just a numeric bound.
      */
     private fun sanitize() {
+        if (shutterAngleDeg.isNaN() || shutterAngleDeg.isInfinite()) shutterAngleDeg = 180f
         shutterAngleDeg = shutterAngleDeg.coerceIn(45f, 360f)
-        shutterSpeedDenominator = shutterSpeedDenominator.coerceIn(1, 8000)
+        if (Models.shutterSpeedDenominators().none { it == shutterSpeedDenominator }) {
+            shutterSpeedDenominator = 48
+        }
         iso = iso.coerceIn(Models.ISO_MIN, Models.ISO_MAX)
+        if (evCompensation.isNaN() || evCompensation.isInfinite()) evCompensation = 0f
         evCompensation = evCompensation.coerceIn(Models.EV_MIN, Models.EV_MAX)
         kelvin = kelvin.coerceIn(Models.KELVIN_MIN, Models.KELVIN_MAX)
         tint = tint.coerceIn(Models.TINT_MIN, Models.TINT_MAX)
+        if (peakingStrength.isNaN() || peakingStrength.isInfinite()) peakingStrength = Models.PEAKING_DEFAULT_UI
         peakingStrength = peakingStrength.coerceIn(0f, 1f)
+        if (zebraThresholdUi.isNaN() || zebraThresholdUi.isInfinite()) zebraThresholdUi = Models.ZEBRA_DEFAULT_UI_THRESHOLD
         zebraThresholdUi = zebraThresholdUi.coerceIn(0.75f, 1.0f)
         zoomRatio = zoomRatio
         reel = reel.coerceAtLeast(1)
@@ -458,6 +471,8 @@ class SettingsStore(context: Context) {
     /**
      * Factory reset (QA Phase 4): wipes m14_cinepro_settings.xml and restores every in-memory
      * field to its default. Callers must rebuild the session + GL uniforms afterwards.
+     * R2-M15: audioMetering + the slate registry fields are now reset in memory too — the wipe
+     * erased their prefs while the HUD kept showing the old values until process restart.
      */
     fun resetAll() {
         prefs.edit().clear().commit()
@@ -494,6 +509,13 @@ class SettingsStore(context: Context) {
         zoomRatio = Models.ZOOM_DEFAULT
         previewFlip180 = false
         rackZoomOn = false
+        audioMetering = Models.AudioMeteringMode.VU_18DBFS
+        reel = 1
+        scene = "1"
+        take = 1
+        goodTake = false
+        director = ""
+        operator = ""
         sceneFlicker = 0
     }
 

@@ -48,7 +48,7 @@ data class OutputHandle(
 class StorageHelper(private val context: Context) {
 
     companion object {
-        private const val TAG = "M14Rec"
+        private const val TAG = "M14_CINEPRO"
 
         /** Canonical contribution folders (stage5_media.md + PART 5 spec). */
         const val DIR_MOVIES = "Movies/M14_CinePro"
@@ -473,13 +473,17 @@ class StorageHelper(private val context: Context) {
     /**
      * MediaStore.Files rows named [displayName] as (RELATIVE_PATH, uri) pairs. Kept in
      * try/catch: provider quirk must never take the Media Pool down (QA Phase 6D).
+     * R2-L16: scoped to the app's own clip directories — a bare DISPLAY_NAME match could
+     * otherwise hit (or delete!) a foreign file that happens to share the name.
      */
     private fun fileRowUris(displayName: String): List<Pair<String?, Uri>> = try {
         val collection = MediaStore.Files.getContentUri("external")
         context.contentResolver.query(
             collection,
             arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.RELATIVE_PATH),
-            "${MediaStore.MediaColumns.DISPLAY_NAME} = ?",
+            "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND (" +
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE '${DIR_MOVIES}%' OR " +
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE '${DIR_DCIM}%')",
             arrayOf(displayName),
             null
         )?.use { c ->

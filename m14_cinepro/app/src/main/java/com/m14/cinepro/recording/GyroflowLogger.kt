@@ -35,7 +35,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 class GyroflowLogger(private val context: Context) {
 
     companion object {
-        private const val TAG = "M14Gyro"
+        private const val TAG = "M14_CINEPRO"
         private const val SENSOR_PRIORITY = Process.THREAD_PRIORITY_MORE_FAVORABLE // -1, see class doc
         private const val WRITER_IDLE_MS = 20L
         private const val WRITER_FLUSH_EVERY = 256
@@ -79,10 +79,16 @@ class GyroflowLogger(private val context: Context) {
                     }
                     // SensorEvent.timestamp is ns since boot -> µs row time (tscale:1 contract).
                     val tUs = event.timestamp / 1000
+                    // R2-H6 (QA Round-2): the gcsv gyro-unit contract is DEG/S. SensorEvent.values
+                    // are SI rad/s — writing them raw made every integrated angle 57.3x too small
+                    // and Gyroflow stabilization a near no-op even though the file looked valid.
                     queue.offer(
                         String.format(
                             Locale.US, "%d,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f",
-                            tUs, value(event, 0), value(event, 1), value(event, 2),
+                            tUs,
+                            Math.toDegrees(value(event, 0).toDouble()),
+                            Math.toDegrees(value(event, 1).toDouble()),
+                            Math.toDegrees(value(event, 2).toDouble()),
                             accel[0], accel[1], accel[2]
                         )
                     )

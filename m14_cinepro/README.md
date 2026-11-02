@@ -43,7 +43,7 @@ On-device verification happens via the local PC agent (ADB).
 | NEVER `AF_MODE_OFF` / `LENS_FOCUS_DISTANCE` on Camera 0 | `FocusController` — AF AUTO/CONTINUOUS + weight-1000 ROIs only |
 | NEVER `NOISE_REDUCTION_MODE_OFF` | Always `NOISE_REDUCTION_MODE_FAST` |
 | 1080p60 is HAL-blocked | Not offered; 720p60 high-speed is the 60 fps path |
-| Kelvin/Tint via exact `dt0.java` math | `color/ColorScience.kt` — Planckian rationals, golden-section CCT (30×, 0.618033988749895), tint offset −130, mired [40,1000] |
+| Kelvin/Tint via exact `dt0.java` math | `color/ColorScience.kt` — Planckian rationals, golden-section CCT (30×, 0.618033988749895), symmetric tint (no device offset — QA Phase 4), mired [40,1000] |
 
 ## Build & install
 

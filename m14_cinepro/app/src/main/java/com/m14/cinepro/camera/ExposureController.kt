@@ -7,7 +7,7 @@ import android.util.Range
 import com.m14.cinepro.core.Models
 import com.m14.cinepro.core.SettingsStore
 
-private const val TAG = "M14Cam"
+private const val TAG = "M14_CINEPRO"
 
 /** Default EV compensation step (1/3 EV) when the HAL does not report CONTROL_AE_COMPENSATION_STEP. */
 private const val DEFAULT_EV_STEP = 1f / 3f
@@ -34,6 +34,9 @@ private const val DEFAULT_EV_STEP = 1f / 3f
  * key can never crash request construction (M14 sanitized request-key law).
  */
 class ExposureController(private val settings: SettingsStore) {
+
+    /** R2-L7: one-shot guard so the missing-EV-caps warning logs once, not per frame. */
+    private var evCapsWarned = false
 
     /** Capability snapshot read once at camera-open from [CameraCharacteristics]. */
     data class CameraCaps(
@@ -98,6 +101,12 @@ class ExposureController(private val settings: SettingsStore) {
                 if (steps != null && caps.evStep > 0f) {
                     val rawSteps = Math.round(settings.evCompensation / caps.evStep)
                     builder.guardedSet(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, clampInt(rawSteps, steps))
+                } else {
+                    // R2-L7: characteristics read but EV caps absent — previously a silent drop.
+                    if (!evCapsWarned) {
+                        evCapsWarned = true
+                        Log.w("M14_CINEPRO", "EV compensation unavailable — HAL reported no evSteps")
+                    }
                 }
             }
             // stage3 §2.4 fps pacing law: 1e9/fps is requested in AE-ON as well.

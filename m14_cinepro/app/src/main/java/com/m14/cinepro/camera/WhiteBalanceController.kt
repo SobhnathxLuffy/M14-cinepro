@@ -9,7 +9,7 @@ import com.m14.cinepro.color.ColorScience
 import com.m14.cinepro.core.Models
 import com.m14.cinepro.core.SettingsStore
 
-private const val TAG = "M14Cam"
+private const val TAG = "M14_CINEPRO"
 
 /**
  * M14 CinePro — white-balance control (stage3_camera2.md §2.5 + §3, QA Phase 4 single-stage law).
@@ -41,25 +41,30 @@ class WhiteBalanceController(private val settings: SettingsStore) {
     /** Last AWB-measured camera color matrix (row-major 3x3 floats); identity until measured. */
     private var measuredCcm: FloatArray = ColorScience.identityCcm()
 
-    /** Preset → Camera2 CONTROL_AWB_MODE value. */
+    /** Preset → Camera2 CONTROL_AWB_MODE value.
+     *
+     * R2-L6: the KELVIN branch is deliberately DAYLIGHT, not AWB_MODE_OFF — [apply] handles
+     * KELVIN before reaching this map (KELVIN == DAYLIGHT lock + shader gains), and returning
+     * OFF here would let any future direct caller set a free-running ISP (single-stage law trap).
+     */
     fun awbCamera2Mode(): Int = when (settings.wbPreset) {
         Models.WbPreset.AUTO -> CaptureRequest.CONTROL_AWB_MODE_AUTO                     // 1
         Models.WbPreset.DAYLIGHT -> CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT            // 5
         Models.WbPreset.CLOUDY_DAYLIGHT -> CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT // 6
         Models.WbPreset.INCANDESCENT -> CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT    // 2
         Models.WbPreset.FLUORESCENT -> CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT      // 3
-        // Unreachable via [apply] under the QA Phase 4 law (KELVIN is locked to DAYLIGHT there);
-        // kept so the preset map stays complete for any direct caller.
-        Models.WbPreset.KELVIN -> CaptureRequest.CONTROL_AWB_MODE_OFF                   // 0
+        // Unreachable via [apply] (KELVIN is locked to DAYLIGHT there); DAYLIGHT keeps the
+        // single-stage law intact for any direct caller.
+        Models.WbPreset.KELVIN -> CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT              // 5
     }
 
     /**
-     * Apply the WB request state onto [builder]. [ccm] is accepted for the established call
-     * contract (CameraEngine forwards its cached value each rebuild) but is no longer consumed by
-     * the request path under the QA Phase 4 single-stage law — no gains are ever written; the
-     * shader math reads the cache through [currentCcm].
+     * Apply the WB request state onto [builder]. Under the QA Phase 4 single-stage law no gains
+     * are ever written (the M14 HAL ignores COLOR_CORRECTION_GAINS); the shader math reads the
+     * cache through [currentCcm]. The former dead `ccm` parameter was removed (R2-L4) — it
+     * forced a synchronized array copy on every request build.
      */
-    fun apply(builder: CaptureRequest.Builder, ccm: FloatArray) {
+    fun apply(builder: CaptureRequest.Builder) {
         if (settings.wbPreset == Models.WbPreset.KELVIN) {
             // QA Phase 4 single-stage law: the ISP is LOCKED to DAYLIGHT (5600 K reference) so it
             // never hunts, and the GL shader applies the relative Kelvin/Tint gains
@@ -110,19 +115,42 @@ class WhiteBalanceController(private val settings: SettingsStore) {
      * look. KELVIN → ColorScience.kelvinShaderGainsRelative (5600 K-normalized: 5600 K + tint 0 is
      * exactly (1,1,1)); hardware presets → identity while tint == 0, otherwise the
      * green-magenta-only trim [1, tintShaderGain(tint), 1].
+     *
+     * R2-M9: the Kelvin path runs a ~600-evaluation Planckian solve, and this is called once per
+     * rendered frame — the result is cached on (preset, kelvin, tint, ccm) and the cache array is
+     * reused, so a steady-state frame allocates nothing. The returned array is read-only at the
+     * call site (uniform upload) and MUST NOT be mutated by callers.
      */
     fun normalizedShaderGains(): FloatArray {
-        if (settings.wbPreset == Models.WbPreset.KELVIN) {
-            return ColorScience.kelvinShaderGainsRelative(
+        val ccm = currentCcm()
+        val p = settings.wbPreset.ordinal
+        val k = settings.kelvin.coerceIn(Models.KELVIN_MIN, Models.KELVIN_MAX)
+        val t = settings.tint.coerceIn(Models.TINT_MIN, Models.TINT_MAX)
+        val ch = ccm.contentHashCode()
+        if (p == keyPreset && k == keyKelvin && t == keyTint && ch == keyCcm) return gainsCache
+        val out = if (settings.wbPreset == Models.WbPreset.KELVIN) {
+            ColorScience.kelvinShaderGainsRelative(
                 settings.kelvin.coerceIn(Models.KELVIN_MIN, Models.KELVIN_MAX),
                 settings.tint.coerceIn(Models.TINT_MIN, Models.TINT_MAX),
-                currentCcm()
+                ccm
             )
+        } else if (settings.tint == 0) {
+            floatArrayOf(1f, 1f, 1f)
+        } else {
+            floatArrayOf(1f, ColorScience.tintShaderGain(settings.tint), 1f)
         }
-        if (settings.tint == 0) return floatArrayOf(1f, 1f, 1f)
-        val g = ColorScience.tintShaderGain(settings.tint)
-        return floatArrayOf(1f, g, 1f)
+        keyPreset = p; keyKelvin = k; keyTint = t; keyCcm = ch
+        out.copyInto(gainsCache)
+        return gainsCache
     }
+
+    // R2-M9 cache: four scalar components (no Long packing — a packed ccm hash collides with
+    // the kelvin bits). Zero allocation on a steady-state frame.
+    private var keyPreset = -1
+    private var keyKelvin = 0
+    private var keyTint = 0
+    private var keyCcm = 0
+    private val gainsCache = floatArrayOf(1f, 1f, 1f)
 
     /** Extract 9 floats from a ColorSpaceTransform (Rational num/den pairs → float). */
     private fun transformToFloats(transform: ColorSpaceTransform): FloatArray? {

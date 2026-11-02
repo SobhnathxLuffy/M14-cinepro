@@ -23,7 +23,7 @@ interface EngineListener {
     /** Per-frame encoded frame counter for the timecode pill (called ~10 Hz from engine). */
     fun onFrameCount(frameIndex: Long, fps: Int)
 
-    /** Stereo audio levels in dBFS, one call per audio buffer (~93 Hz at 512-frame reads). */
+    /** Stereo audio levels in dBFS, throttled to one call per 50 ms (<= 20 Hz). */
     fun onAudioLevels(peakLeftDb: Float, rmsLeftDb: Float, peakRightDb: Float, rmsRightDb: Float)
 
     /**

@@ -95,12 +95,17 @@ class GyroEisController(private val context: Context) {
             }
             Log.i(TAG, "gyro-EIS enabled (crop 0.9, pan gain $PAN_GAIN, max pan $PAN_MAX)")
         } else {
-            try {
-                sensorManager.unregisterListener(sensorListener)
-            } catch (e: Exception) {
-                Log.w(TAG, "unregister failed", e)
+            // R2-M16: unregister must ride the SAME handler as the posted register — a direct
+            // call could run before the pending enable posted behind it, and the late register
+            // would then win and leak the listener forever (subsequent disables early-return).
+            handler.post {
+                try {
+                    sensorManager.unregisterListener(sensorListener)
+                } catch (e: Exception) {
+                    Log.w(TAG, "unregister failed", e)
+                }
+                synchronized(lock) { latest = null }
             }
-            synchronized(lock) { latest = null }
             Log.i(TAG, "gyro-EIS disabled")
         }
     }
@@ -111,6 +116,8 @@ class GyroEisController(private val context: Context) {
     /** Stops sensor delivery and quits the thread (call on Activity teardown). */
     fun release() {
         setEnabled(false)
+        // R2-M16: let the queued unregister run before the thread dies.
+        handler.post { /* drains the unregister posted by setEnabled(false) */ }
         thread.quitSafely()
     }
 

@@ -57,7 +57,7 @@ class ViewfinderRenderer(
 ) : GLSurfaceView.Renderer {
 
     companion object {
-        private const val TAG = "M14GL"
+        private const val TAG = "M14_CINEPRO"
 
         /** Full-screen quad, TRIANGLE_STRIP order (-1,-1),(1,-1),(-1,1),(1,1), vec4 attribute. */
         private val QUAD_COORDS = floatArrayOf(
@@ -88,7 +88,7 @@ class ViewfinderRenderer(
             "wbTrimVisible", "wbGains",
             "luminanceVisible", "luminanceScale", "luminanceOffset", "luminanceTexture",
             "lut3DVisible", "lut3DScale", "lut3DOffset", "lut3DTexture",
-            "falseColorVisible", "colorSpace",
+            "falseColorVisible",
             "zebrasVisible", "midGreyMode", "zebraThreshold", "zebraShift", "zebraWidth",
             "zebraColor", "outWidth", "outHeight",
             "focusAssistVisible", "enableColoredLines", "lineColor", "peakingThreshold"
@@ -188,6 +188,9 @@ class ViewfinderRenderer(
         GLES32.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
 
         val st = SurfaceTexture(cameraOesTex)
+        // R2-L19: EGL context loss can re-enter onSurfaceCreated — release the stale
+        // SurfaceTexture before overwriting it, or its buffer queue leaks.
+        surfaceTexture?.release()
         surfaceTexture = st
         st.setOnFrameAvailableListener { host?.requestRender() }
 
@@ -235,7 +238,11 @@ class ViewfinderRenderer(
         pictureTop = rect[1].toInt()
         pictureWidth = rect[2].toInt()
         pictureHeight = rect[3].toInt()
+        appliedDesqueeze = settings.desqueeze.factor
     }
+
+    /** R2-H4: tracks the factor the viewport was last built with (NaN forces the first build). */
+    private var appliedDesqueeze = Float.NaN
 
     override fun onDrawFrame(gl: GL10?) {
         if (!priorityApplied) {
@@ -248,6 +255,8 @@ class ViewfinderRenderer(
                     Process.setThreadPriority(Process.myTid(), Process.THREAD_PRIORITY_URGENT_DISPLAY)
                     Log.w("M14_CINEPRO", "M14GL thread priority fallback to URGENT_DISPLAY: ${t.message}")
                 } catch (ignored: Throwable) {
+                    // R2-L17: even the fallback failed — never stay silent.
+                    Log.w("M14_CINEPRO", "M14GL URGENT_DISPLAY priority fallback also failed", ignored)
                 }
                 Log.w(TAG, "M14GL setThreadPriority(-19) failed: ${t.message}")
                 true
@@ -255,6 +264,10 @@ class ViewfinderRenderer(
         }
 
         resolvePendingLut()
+
+        // R2-H4: the picture rect used to be rebuilt only on surface changes, so tapping an
+        // anamorphic chip moved the HUD guides but not the GL viewport until the next resurface.
+        if (appliedDesqueeze != settings.desqueeze.factor) updatePictureRect()
 
         val st = surfaceTexture
         if (st == null || outW <= 0 || outH <= 0 || program == 0 || positionAttrib < 0) {
@@ -281,7 +294,14 @@ class ViewfinderRenderer(
         // exactly 180° upside down). settings.previewFlip180 adds a further operator 180°.
         val host = host
         val rotation = if (host != null && host.isAttachedToWindow) {
-            try { host.display?.rotation ?: Surface.ROTATION_0 } catch (t: Throwable) { Surface.ROTATION_0 }
+            try {
+                host.display?.rotation ?: Surface.ROTATION_0
+            } catch (t: Throwable) {
+                // R2-L17: destroyed-display race during rotation — log instead of silently
+                // falling back to the 180° default (which would look like the V2 inversion bug).
+                Log.w("M14_CINEPRO", "display.rotation read failed — assuming ROTATION_0", t)
+                Surface.ROTATION_0
+            }
         } else {
             Surface.ROTATION_0
         }
@@ -487,8 +507,8 @@ class ViewfinderRenderer(
         }
 
         // False color: fast variant consumes the PRE-LUT luminance (inLuminance in main()).
+        // R2-L26: the dead colorSpace uniform was dropped — the fast variant is 709-SDR fixed.
         u1i("falseColorVisible", if (settings.falseColorOn) 1 else 0)
-        u1i("colorSpace", 0) // Rec.709 SDR
 
         // Zebras.
         u1i("zebrasVisible", if (settings.zebraMode != Models.ZebraMode.OFF) 1 else 0)
@@ -513,7 +533,7 @@ class ViewfinderRenderer(
     /**
      * Zebra mode -> (midGreyMode, zebraThreshold).
      *  QA Phase 6: raw FULL-RANGE float RGB thresholds — the x0.93 Rec.709 display-profile
-     *  factor (Models.ZEBRA_THRESHOLD_SCALE_709) is removed; that rescale made zebras fire
+     *  rescale is removed (constant deleted, QA Round-2 R2-L15); that rescale made zebras fire
      *  prematurely on non-clipping skin tones.
      *  Z95/Z90: midGreyMode 0, anchored raw thresholds 0.95 / 0.90.
      *  OFF / custom: the raw persisted UI threshold (value unused while zebrasVisible = 0).

@@ -198,6 +198,9 @@ class HudController(
             settings.zoomRatio = target
             zoomApplier?.invoke(target)
             zoomPill.text = zoomLabel()
+            // R2-N3: keep an open zoom panel in sync with pinch-driven changes (safe here — the
+            // pinch touch stream belongs to the overlay, not to the panel's SeekBar).
+            if (openPanelId == PANEL_ZOOM) renderPanel(PANEL_ZOOM)
         }
     }
 
@@ -1031,6 +1034,14 @@ class HudController(
                 })
             }
         )
+        // R2-M11: parity — reset to the factory 4K 24 format.
+        c.resetChip {
+            val p = Models.ResPreset.UHD_4K_24
+            settings.resolution = p
+            refreshAll()
+            hooks.onFormatChanged(p)
+            closePanel()
+        }
     }
 
     private fun panelCodec(c: LinearLayout) {
@@ -1046,6 +1057,14 @@ class HudController(
                 })
             }
         )
+        // R2-M11: parity — reset to the factory 80 Mbps HEVC bitrate.
+        c.resetChip {
+            val p = Models.BitratePreset.M80
+            settings.bitrate = p
+            refreshAll()
+            hooks.onBitrateChanged(p)
+            closePanel()
+        }
     }
 
     private fun panelZoom(c: LinearLayout) {
@@ -1063,9 +1082,10 @@ class HudController(
             )
         )
         c.slider(
-            "Zoom", 10, 80, 1, (settings.zoomRatio * 10f).roundToInt(),
-            { String.format(Locale.US, "%.1fx", it / 10f) },
-            { v -> applyZoom(v / 10f) }
+            // R2-L21: 0.05x steps so the 1.35x chip is representable (a 0.1x grid snapped it to 1.4x).
+            "Zoom", 20, 160, 1, (settings.zoomRatio * 20f).roundToInt(),
+            { String.format(Locale.US, "%.2fx", it / 20f) },
+            { v -> applyZoom(v / 20f, fromSlider = true) }
         )
         c.resetChip { applyZoom(Models.ZOOM_DEFAULT) }
     }
@@ -1074,7 +1094,7 @@ class HudController(
      * QA Phase 6 zoom sink: clamps to the CONTROL_ZOOM_RATIO law, drives zoomApplier (wired by
      * MainActivity to CameraEngine.setZoomRatio) and, with RACK 1.5s armed, sweeps a 1.5 s servo.
      */
-    private fun applyZoom(target: Float) {
+    private fun applyZoom(target: Float, fromSlider: Boolean = false) {
         val to = target.coerceIn(Models.ZOOM_MIN, Models.ZOOM_MAX)
         if (settings.rackZoomOn && to != settings.zoomRatio) {
             // Smooth 1.5 s servo rack (QA Phase 6): ValueAnimator sweep, zoomApplier every frame.
@@ -1093,7 +1113,14 @@ class HudController(
             settings.zoomRatio = to
             zoomApplier?.invoke(to)
         }
-        refreshAll()
+        // R2-H7: the slider drag path must NOT rebuild the open panel (removeAllViews detaches
+        // the SeekBar mid-gesture and kills the drag) — update the pill inline instead. Chip and
+        // reset callers keep the full refresh so chip active-states resync.
+        if (fromSlider) {
+            zoomPill.text = zoomLabel()
+        } else {
+            refreshAll()
+        }
     }
 
     private fun panelShutter(c: LinearLayout) {
@@ -1157,7 +1184,8 @@ class HudController(
             { v ->
                 settings.shutterAngleDeg = v / 10f
                 onSettingsDirty?.invoke()
-                refreshAll()
+                // R2-H7: no refreshAll() mid-drag — inline pill + readout updates only.
+                shutterPill.text = settings.shutterLabel()
                 readout.text = exposureReadout()
             }
         )
@@ -1192,6 +1220,7 @@ class HudController(
         c.resetChip {
             settings.shutterMode = Models.ShutterMode.ANGLE
             settings.shutterAngleDeg = 180f
+            settings.shutterSpeedDenominator = 48  // R2-N2: restore the hidden speed default too
             onSettingsDirty?.invoke()
             refreshAll()
             readout.text = exposureReadout()
@@ -1259,6 +1288,8 @@ class HudController(
                 { v ->
                     settings.iso = Models.isoStops()[v].toInt()
                     onSettingsDirty?.invoke()
+                    // R2-M13: the ISO pill went stale during drags until an unrelated refresh.
+                    isoPill.text = settings.isoLabel()
                 }
             )
         }
@@ -1294,7 +1325,8 @@ class HudController(
                     settings.kelvin = Models.kelvinFromMired(v)
                     settings.wbPreset = Models.WbPreset.KELVIN
                     onSettingsDirty?.invoke()
-                    refreshAll()
+                    // R2-H7: no refreshAll() mid-drag — inline pill update only.
+                    wbPill.text = settings.wbLabel()
                 }
             )
         }
@@ -1340,7 +1372,9 @@ class HudController(
                     settings.wbPreset = Models.WbPreset.KELVIN
                 }
                 onSettingsDirty?.invoke()
-                refreshAll()
+                // R2-H7: no refreshAll() mid-drag — the tint move also flips the WB pill to KELVIN.
+                tintPill.text = tintLabel()
+                wbPill.text = settings.wbLabel()
             }
         )
         c.resetChip {
@@ -1360,13 +1394,21 @@ class HudController(
                     refreshAll()
                     hooks.onEisToggled(settings.eisOn)
                 }),
-                ChipItem("TORCH", { settings.torchOn }, {
+                ChipItem(activity.getString(R.string.btn_torch), { settings.torchOn }, {
                     settings.torchOn = !settings.torchOn
                     refreshAll()
                     hooks.onTorchToggled(settings.torchOn)
                 })
             )
         )
+        // R2-M11: parity with the other panels — EIS + torch off is the factory state.
+        c.resetChip {
+            settings.eisOn = false
+            hooks.onEisToggled(false)
+            settings.torchOn = false
+            hooks.onTorchToggled(false)
+            refreshAll()
+        }
     }
 
     private fun panelPeak(c: LinearLayout) {
@@ -1392,12 +1434,14 @@ class HudController(
             { String.format(Locale.US, "%.2f", it / 100f) },
             { v ->
                 settings.peakingStrength = v / 100f
-                refreshAll()
+                // R2-H7: no refreshAll() mid-drag — active-bg inline update only.
+                setActiveBg(peakPill, settings.peakingMode != Models.PeakingMode.OFF)
             }
         )
         c.resetChip {
             settings.peakingMode = Models.PeakingMode.OFF
             settings.peakingStrength = Models.PEAKING_DEFAULT_UI
+            settings.peakingColor = Models.PeakingColor.RED  // R2-N2: restore hidden color default
             refreshAll()
         }
     }
@@ -1435,7 +1479,8 @@ class HudController(
             )
         )
         if (settings.zebraMode == Models.ZebraMode.Z95 || settings.zebraMode == Models.ZebraMode.Z90) {
-            // QA Phase 6B4: the readout is the raw UI threshold — the ×0.93 709 term lives in GL.
+            // QA Phase 6B4 + Round-2 R2-L15: the readout is the raw UI threshold; thresholds are
+            // RAW end-to-end (no 709 rescale exists anywhere since the Phase 6 fix).
             c.slider(
                 "Thresh", 75, 100, 1, (settings.zebraThresholdUi * 100f).roundToInt(),
                 { v -> String.format(Locale.US, "%.2f", v / 100f) },

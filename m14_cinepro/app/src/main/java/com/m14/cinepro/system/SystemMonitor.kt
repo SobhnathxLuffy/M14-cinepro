@@ -118,8 +118,11 @@ class SystemMonitor(context: Context, private val listener: EngineListener) {
         if (tenths != Int.MIN_VALUE) tempC = tenths / 10.0f
     }
 
+    /** R2-L27: cached storage helper — a fresh instance + StatFs per 5 s poll / battery burst is waste. */
+    private val storageHelper by lazy { StorageHelper(appContext) }
+
     private fun refreshStorageAndThermal() {
-        freeGb = runCatching { StorageHelper(appContext).freeGb() }.getOrDefault(0f)
+        freeGb = runCatching { storageHelper.freeGb() }.getOrDefault(0f)
         thermalHeadroom = if (Build.VERSION.SDK_INT >= 30) {
             runCatching {
                 val pm = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager

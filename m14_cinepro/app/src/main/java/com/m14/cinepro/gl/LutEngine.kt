@@ -31,7 +31,7 @@ import java.nio.charset.StandardCharsets
 class LutEngine {
 
     companion object {
-        private const val TAG = "M14GL"
+        private const val TAG = "M14_CINEPRO"
 
         /** Built-in grid resolution (stage4 law: 33^3 everywhere). */
         const val LUT_SIZE = 33

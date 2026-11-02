@@ -24,8 +24,10 @@ import kotlin.math.sqrt
  *  - 10-iteration mired refinement loop (98% error correction, mired clamped [40,1000]).
  *  - Reverse CCT: golden-section search, 30 iterations, invphi = 0.618033988749895, mired [40,1000],
  *    minimizing squared uv distance to the locus; degenerate chromaticity falls back to 5000 K.
- *  - Reverse tint: tint = clamp(−200·ln(gG / sqrt(gR·gB)) − 130, −50, +50); the 0.72 green sensor
+ *  - Reverse tint: tint = clamp(−200·ln(gG / sqrt(gR·gB)), −50, +50); the 0.72 green sensor
  *    baseline factor applies ONLY to the CCT estimate input, never to the tint formula.
+ *    (QA Phase 4/Round-2: the legacy Blackmagic "−130 device tint offset" is REMOVED — no
+ *    offset exists in either direction of the tint math.)
  */
 object ColorScience {
 
@@ -121,6 +123,8 @@ object ColorScience {
             gG = gGM * k
             gB = bReq * k
             val kelvinAchieved = cctEstimate(1.0f / gR, (1.0f / gG) * GREEN_BASELINE, 1.0f / gB, ccm)
+            // R2-L28: Ints — this is exact equality, not a tolerance loop (the loop bound below
+            // is what actually limits refinement; keep as-is, do not "fix" to a Float tolerance).
             if (abs(kelvin - kelvinAchieved) < 0.1) break
             val correction = mired + ((targetMired - (1_000_000.0 / kelvinAchieved)) * 0.98)
             mired = correction.coerceIn(MIRED_MIN, MIRED_MAX)
@@ -196,7 +200,7 @@ object ColorScience {
         val X = 0.4124f * rr + 0.3576f * gg + 0.1805f * bb
         val Y = 0.2126f * rr + 0.7152f * gg + 0.0722f * bb
         val d = 3f * (0.0193f * rr + 0.1192f * gg + 0.9505f * bb) + 15f * Y + X
-        if (d == 0f) return 5000 // DNSConstants.PROBE_THROTTLE_COUNT_INTERVAL sentinel
+        if (d == 0f) return 5000 // degenerate chromaticity -> 5000 K fallback (KDoc law)
         val u = (4f * X).toDouble() / d.toDouble()
         val v = (6f * Y).toDouble() / d.toDouble()
         var lo = MIRED_MIN
@@ -214,7 +218,8 @@ object ColorScience {
     /**
      * Read-back (dt0.b): gains + CCM -> (kelvin, tint).
      * green input to CCT = (1 / mean(green gains)) * 0.72 sensor baseline;
-     * tint = clamp(−200·ln(gG / sqrt(gR·gB)) − 130, −50, +50) on the RAW gains.
+     * tint = clamp(−200·ln(gG / sqrt(gR·gB)), −50, +50) on the RAW gains (no device offset —
+     * the legacy −130 constant was removed with the QA Phase 4 single-stage law).
      */
     fun rggbToKelvinTint(gains: RggbChannelVector, ccm: FloatArray): Pair<Int, Int> {
         val red = 1.0f / gains.red

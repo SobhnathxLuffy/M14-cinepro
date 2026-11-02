@@ -156,7 +156,8 @@ object SlateDialog {
             }
             .setNeutralButton(activity.getString(R.string.btn_reset_all)) { dialog, _ ->
                 // QA Phase 4: global factory reset straight from the slate form.
-                settings.resetAll()
+                // R2-L22: only the MainActivity hook runs resetAll() — a second direct call here
+                // wiped prefs BEFORE the stop-recording guard and double-reset the state.
                 onResetAll?.invoke()
                 dialog.dismiss()
             }

@@ -28,7 +28,7 @@ import com.m14.cinepro.core.Models
 import com.m14.cinepro.core.SettingsStore
 import java.util.concurrent.Executor
 
-private const val TAG = "M14Cam"
+private const val TAG = "M14_CINEPRO"
 
 /** Camera 0 = back camera (task law; M14 single rear 50MP S5KJN1). */
 private const val CAMERA_ID = "0"
@@ -42,7 +42,12 @@ private const val TELEMETRY_MIN_INTERVAL_MS = 333L
 /** "frame drop (HAL)" info lines are throttled to at most one per second. */
 private const val FRAME_DROP_INFO_INTERVAL_MS = 1_000L
 
-/** Delay before the post-tap repeating request flips CONTROL_AF_TRIGGER START -> IDLE (~150 ms law). */
+/**
+ * Delay before the post-tap repeating request flips CONTROL_AF_TRIGGER START -> IDLE (~150 ms law).
+ * QA Round-2 R2-L9: intentionally 10 ms LONGER than FocusController.AF_TRIGGER_IDLE_DELAY_MS
+ * (150) — the delta is what guarantees the delayed rebuild promotes TAP_START -> TAP_ACTIVE.
+ * Do NOT "fix" these to equality.
+ */
 private const val AF_TRIGGER_IDLE_RESET_DELAY_MS = 160L
 
 /**
@@ -124,7 +129,14 @@ class CameraEngine(
     /** Session-configuration executor: dispatches session callbacks onto the camera thread. */
     private val sessionExecutor = Executor { runnable ->
         val handler = camHandler
-        if (handler != null) handler.post(runnable) else runnable.run()
+        if (handler != null) {
+            handler.post(runnable)
+        } else {
+            // R2-L8: unreachable in practice (ensureHandler runs before any session call); log so a
+            // future caller-thread regression is visible instead of silent.
+            Log.w("M14_CINEPRO", "sessionExecutor: camHandler null — running on caller thread")
+            runnable.run()
+        }
     }
 
     /** Post-tap delayed refresh: flips CONTROL_AF_TRIGGER back to IDLE ~150 ms after a tap. */
@@ -321,13 +333,30 @@ class CameraEngine(
     /**
      * Set the zoom ratio (persisted setting; setter self-clamps 1..8 + NaN-guard) and push the
      * repeating request so the new CONTROL_ZOOM_RATIO lands without a session rebuild.
+     * R2-L5: applies are coalesced (last-writer-wins — the value is re-read from settings at
+     * build time) so the 1.5 s rack-zoom servo / pinch stream cannot flood the camera thread
+     * with one setRepeating per animation frame.
      */
     fun setZoomRatio(ratio: Float) {
         val max = maxZoomRatio()
         val target = if (ratio.isNaN() || ratio.isInfinite()) Models.ZOOM_DEFAULT else ratio.coerceIn(Models.ZOOM_MIN, max)
         settings.zoomRatio = target
-        ensureHandler().post { applySettingsInternal() }
+        queueApply()
     }
+
+    private val applyQueued = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private fun queueApply() {
+        val handler = ensureHandler()
+        if (!applyQueued.compareAndSet(false, true)) return
+        handler.post {
+            applyQueued.set(false)
+            applySettingsInternal()
+        }
+    }
+
+    /** QA Round-2 R2-H3 companion accessor: true while the HS mode is degraded to a regular session. */
+    fun isHsFallback(): Boolean = hsFallbackActive
 
     /** Current zoom ratio (persisted setting; Models.ZOOM_DEFAULT until [setZoomRatio]). */
     fun zoomRatio(): Float = settings.zoomRatio
@@ -455,18 +484,29 @@ class CameraEngine(
             override fun onConfigured(configured: CameraCaptureSession) {
                 session = configured
                 val builder = buildBaseRequest()
-                val ok = builder != null && setRepeating(configured, builder)
-                if (ok) sessionRebuildAttempted = false
-                sessionConfigured = ok
-                mainNotify { onConfigured(ok) }
+                if (builder == null) {
+                    sessionConfigured = false
+                    mainNotify { onConfigured(false) }
+                    return
+                }
+                // R2-H2: when setRepeating fails it routes through handleSessionFailure(e,
+                // onConfigured), which owns the exactly-once caller report (rebuild outcome or
+                // explicit false) — so a successful HS->regular fallback now reaches MainActivity
+                // as true and the operator can record without re-picking the format.
+                val ok = setRepeating(configured, builder, onConfigured)
+                if (ok) {
+                    sessionRebuildAttempted = false
+                    sessionConfigured = true
+                    mainNotify { onConfigured(true) }
+                }
             }
 
             override fun onConfigureFailed(configured: CameraCaptureSession) {
                 Log.w(TAG, "session configuration failed")
                 if (session === configured) session = null
                 sessionConfigured = false
-                mainNotify { onConfigured(false) }
-                handleSessionFailure(SessionException("session configuration failed"))
+                // R2-H2: report the REBUILD outcome, not a pre-emptive false (one-rebuild law doc).
+                handleSessionFailure(SessionException("session configuration failed"), onConfigured)
             }
 
             override fun onClosed(closed: CameraCaptureSession) {
@@ -491,13 +531,13 @@ class CameraEngine(
                 cameraDevice.createCaptureSession(sessionConfiguration)
             }
         } catch (e: CameraAccessException) {
-            failSessionCreate(e, onConfigured)
+            failSessionCreate(e, highSpeed, recordSurface, previewSurface, onConfigured)
         } catch (e: IllegalArgumentException) {
-            failSessionCreate(e, onConfigured)
+            failSessionCreate(e, highSpeed, recordSurface, previewSurface, onConfigured)
         } catch (e: SecurityException) {
-            failSessionCreate(e, onConfigured)
+            failSessionCreate(e, highSpeed, recordSurface, previewSurface, onConfigured)
         } catch (e: Exception) {
-            failSessionCreate(e, onConfigured)
+            failSessionCreate(e, highSpeed, recordSurface, previewSurface, onConfigured)
         }
     }
 
@@ -507,8 +547,37 @@ class CameraEngine(
         mainNotify { onConfigured(false) }
     }
 
-    /** One-shot session rebuild law: on session failure, rebuild exactly once. */
-    private fun handleSessionFailure(e: Throwable) {
+    /**
+     * QA Round-2 R2-H1: a SYNCHRONOUS HS creation failure (the V1 signature — e.g.
+     * IllegalArgumentException thrown straight out of createConstrainedHighSpeedCaptureSession)
+     * must degrade once to a regular session instead of dead-ending without a session. The
+     * rebuild reuses the caller's [onConfigured], so the outcome is still reported exactly once.
+     */
+    private fun failSessionCreate(
+        e: Exception,
+        highSpeed: Boolean,
+        recordSurface: Surface?,
+        previewSurface: Surface,
+        onConfigured: (Boolean) -> Unit
+    ) {
+        if (highSpeed && !hsFallbackActive && !sessionRebuildAttempted) {
+            hsFallbackActive = true
+            sessionRebuildAttempted = true
+            Log.w("M14_CINEPRO", "HS session create failed — falling back to regular session @30fps", e)
+            mainNotify { listener.onInfo("hs_fallback") }
+            createSessionOutputs(recordSurface, previewSurface, forceRegular = true, onConfigured = onConfigured)
+            return
+        }
+        failSessionCreate(e, onConfigured)
+    }
+
+    /**
+     * One-shot session rebuild law: on session failure, rebuild exactly once and report the
+     * REBUILD outcome to the waiting caller (QA Round-2 R2-H2) — a successful HS->regular
+     * fallback therefore reaches MainActivity as true. [onConfigured] is null when the failure
+     * came from applySettingsInternal/focusAt (no caller is waiting on a session outcome).
+     */
+    private fun handleSessionFailure(e: Throwable, onConfigured: ((Boolean) -> Unit)? = null) {
         Log.w(TAG, "session failure", e)
         sessionConfigured = false
         mainNotify { listener.onError("session", e) }
@@ -517,6 +586,9 @@ class CameraEngine(
             // regular session (AE clamped to 30 fps) so the rebuild below bypasses the HS path.
             hsFallbackActive = true
             Log.w("M14_CINEPRO", "HS session failed — falling back to regular session @30fps")
+            // R2-H3: the encoder timeline was stamped for the preset fps; MainActivity re-stamps
+            // the CFR timeline to 30 fps on this signal (RecordingController.setEffectiveFps).
+            mainNotify { listener.onInfo("hs_fallback") }
         }
         if (!sessionRebuildAttempted) {
             sessionRebuildAttempted = true
@@ -524,9 +596,12 @@ class CameraEngine(
             if (previewSurface != null) {
                 createSessionOutputs(currentRecordSurface, previewSurface) { ok ->
                     if (!ok) Log.w(TAG, "session rebuild failed")
+                    if (onConfigured != null) mainNotify { onConfigured(ok) }
                 }
+                return
             }
         }
+        if (onConfigured != null) mainNotify { onConfigured(false) }
     }
 
     // -----------------------------------------------------------------------------------------
@@ -583,7 +658,9 @@ class CameraEngine(
         // CONTROL_ENABLE_ZSL is never set (M14 law: deterministic non-ZSL video pipeline).
 
         exposureController.apply(builder, exposureCaps, settings.fps)
-        whiteBalanceController.apply(builder, whiteBalanceController.currentCcm())
+        // R2-L4: the dead ccm argument forced a synchronized array copy on EVERY request build
+        // (incl. each rack-zoom servo frame) — the request path no longer consumes it.
+        whiteBalanceController.apply(builder)
         focusController.apply(builder, activeArrayRect, sensorOrientationDeg)
 
         builder.trySet(
@@ -598,7 +675,11 @@ class CameraEngine(
      * Returns false and routes through the one-rebuild law on session-level failures; a rejected
      * request payload is logged + surfaced as info without a rebuild loop.
      */
-    private fun setRepeating(targetSession: CameraCaptureSession, builder: CaptureRequest.Builder): Boolean {
+    private fun setRepeating(
+        targetSession: CameraCaptureSession,
+        builder: CaptureRequest.Builder,
+        onConfigured: ((Boolean) -> Unit)? = null
+    ): Boolean {
         val handler = camHandler
         return try {
             if (targetSession is CameraConstrainedHighSpeedCaptureSession) {
@@ -609,14 +690,20 @@ class CameraEngine(
             }
             true
         } catch (e: CameraAccessException) {
-            handleSessionFailure(e)
+            handleSessionFailure(e, onConfigured)
             false
         } catch (e: IllegalStateException) {
-            handleSessionFailure(e)
+            handleSessionFailure(e, onConfigured)
             false
         } catch (e: IllegalArgumentException) {
-            Log.w(TAG, "repeating request rejected", e)
-            mainNotify { listener.onInfo("request rejected: ${e.message ?: "bad request"}") }
+            if (targetSession is CameraConstrainedHighSpeedCaptureSession) {
+                // R2-M1: a rejected HS burst list is the V2 crash class — the session is configured
+                // but can never run a burst, so it must go through the one-rebuild fallback law.
+                handleSessionFailure(e, onConfigured)
+            } else {
+                Log.w(TAG, "repeating request rejected", e)
+                mainNotify { listener.onInfo("request rejected: ${e.message ?: "bad request"}") }
+            }
             false
         }
     }

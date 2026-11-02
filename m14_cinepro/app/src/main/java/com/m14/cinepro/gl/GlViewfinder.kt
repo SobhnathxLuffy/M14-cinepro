@@ -43,6 +43,9 @@ class GlViewfinder(
         setEGLConfigChooser(8, 8, 8, 8, 24, 0)
         setPreserveEGLContextOnPause(true)
         setRenderer(renderer)
+        // R2-C8 note: continuous rendering is deliberate — the animated zebra march + HUD-driven
+        // uniform updates need steady frames even when the camera delivers 24 fps into a 60 Hz
+        // vsync; the frame-available listener below is a belt-and-braces kick, not the pacer.
         renderMode = RENDERMODE_CONTINUOUSLY
     }
 

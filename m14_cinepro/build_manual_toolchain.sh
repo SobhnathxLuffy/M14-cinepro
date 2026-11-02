@@ -56,14 +56,25 @@ log "Compiling Kotlin sources"
 SRC_DIRS=("$APP/src/main/java")
 find_args=()
 for d in "${SRC_DIRS[@]}"; do find_args+=( "$d" ); done
+# R2-L23: kotlin-stdlib MUST be on the classpath (kotlinc does not bundle it without
+# -include-runtime, and d8 only sees what we pass) — without it every Kotlin class's
+# Intrinsics.checkNotNullParameter prologue throws NoClassDefFoundError at first use.
+KOTLIN_LIB="$(dirname "$(command -v kotlinc)")/../lib"
+STDLIB_JARS=""
+for jar in "$KOTLIN_LIB/kotlin-stdlib.jar" "$KOTLIN_LIB/kotlin-stdlib-jdk8.jar" \
+           "$KOTLIN_LIB/kotlin-stdlib-jdk7.jar"; do
+    [ -f "$jar" ] && STDLIB_JARS="$STDLIB_JARS:$jar"
+done
+STDLIB_JARS="${STDLIB_JARS#:}"
+[ -n "$STDLIB_JARS" ] || { echo "ERROR: kotlin-stdlib.jar not found under $KOTLIN_LIB" >&2; exit 1; }
 kotlinc "${find_args[@]}" "$OUT/gen" \
-    -classpath "$PLATFORM" \
+    -classpath "$PLATFORM:$STDLIB_JARS" \
     -jvm-target 17 \
     -d "$OUT/obj"
 
 log "Converting to DEX with d8"
 find "$OUT/obj" -name '*.class' > "$OUT/classlist.txt"
-"$BUILD_TOOLS/d8" --output "$OUT/apk" --lib "$PLATFORM" $(cat "$OUT/classlist.txt")
+"$BUILD_TOOLS/d8" --output "$OUT/apk" --lib "$PLATFORM" --lib "$KOTLIN_LIB/kotlin-stdlib.jar" $(cat "$OUT/classlist.txt")
 
 log "Adding DEX + assets to APK"
 cd "$OUT/apk"

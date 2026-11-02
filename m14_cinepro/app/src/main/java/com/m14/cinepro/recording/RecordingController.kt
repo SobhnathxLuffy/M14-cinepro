@@ -47,7 +47,7 @@ class RecordingController(
 ) {
 
     companion object {
-        private const val TAG = "M14Rec"
+        private const val TAG = "M14_CINEPRO"
 
         /** MediaFormat "color-format" = 0x7F000789 COLOR_FormatSurface (stage5 §2.2). */
         private const val COLOR_FORMAT_SURFACE = 2130708361
@@ -93,6 +93,8 @@ class RecordingController(
 
     // ---- take state (all mutations on the drain thread; volatile flags for cross-thread reads) ----
     @Volatile private var recording = false
+    /** R2-M3: true between stopRecording and the delayed finalize — blocks take-state overwrite. */
+    @Volatile private var finalizing = false
     @Volatile private var frameIndexCounter = 0L
     private var firstPtsUs = -1L
     private var muxer: MediaMuxer? = null
@@ -208,6 +210,33 @@ class RecordingController(
 
     fun frameIndex(): Long = frameIndexCounter
 
+    /**
+     * QA Round-2 R2-H3: after an HS->regular session fallback the camera degrades to 30 fps
+     * capture while the CFR timeline was stamped for the preset fps (60) — without this
+     * correction a take would mux 30 fps of content into a 60 fps timeline (2x fast clip,
+     * linearly desyncing audio). Re-stamps ONLY the CFR timeline (codec + input surface stay
+     * untouched), so no session rebuild and no HS-retry loop. Takes effect from the next take.
+     * Called by MainActivity on the engine's "hs_fallback" signal.
+     */
+    fun setEffectiveFps(effectiveFps: Int) {
+        drainHandler.post {
+            if (recording) {
+                Log.w(TAG, "hs fallback fps correction deferred — take is active")
+                return@post
+            }
+            if (effectiveFps >= fps) return@post  // correction only ever slows the timeline
+            fps = effectiveFps
+            frameDurationUs = Math.round(1_000_000.0 / effectiveFps)
+            // Keep prepareEncoder's dedup key honest so the next explicit rebuild reconfigures
+            // with the correct fps instead of reusing the stale 60 fps configuration.
+            configuredKey = configuredKey
+                .replace(Regex("@ \\d+fps"), "@ ${effectiveFps}fps")
+                .replace("hs=true", "hs=false")
+            videoFormat?.setInteger(MediaFormat.KEY_FRAME_RATE, effectiveFps)
+            Log.w(TAG, "HS fallback: CFR timeline re-stamped to ${effectiveFps} fps")
+        }
+    }
+
     // ------------------------------------------------------------------
     // Encoder setup
     // ------------------------------------------------------------------
@@ -255,8 +284,11 @@ class RecordingController(
         fmt.setFloat(MediaFormat.KEY_I_FRAME_INTERVAL, 1.0f)
         fmt.setInteger(MediaFormat.KEY_FRAME_RATE, fps)
         if (highSpeed) {
-            // QA Phase 3 law: the HS HAL captures at 120 fps physical (Range(120,120)) while the
-            // MP4 is stamped at fps (= 60 for HD_720_60_HS) — 2x smooth slow-motion playback.
+            // QA Phase 3 law: the HS HAL physically captures ~60.06 fps at Range(120,120) while the
+            // MP4 is stamped at fps (= 60 for HD_720_60_HS) — i.e. the recorded timeline is
+            // REAL-TIME (QA Round-2 R2-L12: the old "2x slow-motion" comment was wrong; Gyroflow
+            // consumes the .gcsv separately for stabilization). capture-rate == frame-rate keeps
+            // the key inert on purpose.
             fmt.setFloat("capture-rate", fps.toFloat())
         }
         return fmt
@@ -517,6 +549,14 @@ class RecordingController(
             Log.w(TAG, "startRecording ignored — already recording")
             return
         }
+        if (finalizing) {
+            // R2-M3: a start inside the MUX_STOP_DELAY_MS (300 ms) finalize window would overwrite
+            // the old take's muxer/pfd/clipBaseName (leak + the pending finalize would stop the NEW
+            // muxer). Requeue behind the finalize instead.
+            Log.w(TAG, "startRecording requeued — previous take is finalizing")
+            drainHandler.post { startRecordingLocked(clip) }
+            return
+        }
         if (codec == null || inputSurface == null) {
             notifyError("record", RuntimeException("encoder not prepared — call prepareEncoder() first"))
             return
@@ -602,6 +642,7 @@ class RecordingController(
             return
         }
         recording = false
+        finalizing = true
         drainHandler.removeCallbacks(frameTicker)
         try {
             val drop = Bundle()
@@ -615,43 +656,53 @@ class RecordingController(
     }
 
     private fun finalizeTakeLocked() {
-        val clip = clipBaseName
-        val frames = frameIndexCounter
-        val durationMs = System.currentTimeMillis() - takeStartMs
-        val started = muxerStarted // captured before teardown flips the flag
-        if (started) {
-            try {
-                muxer?.stop()
-            } catch (e: Throwable) {
-                Log.e(TAG, "muxer stop failed", e)
-                notifyError("muxer", e)
-            }
-        } else {
-            Log.w(TAG, "muxer never started — discarding unfinished clip $clip")
-        }
-        try { muxer?.release() } catch (e: Throwable) { Log.w(TAG, "muxer release", e) }
-        muxer = null
-        muxerStarted = false
-        videoTrack = -1
-        audioTrack = -1
-        pendingAudio.clear()
-        try { videoPfd?.close() } catch (e: Throwable) { Log.w(TAG, "pfd close", e) }
-        videoPfd = null
-        if (videoUri != null) {
+        try {
+            val clip = clipBaseName
+            val frames = frameIndexCounter
+            val durationMs = System.currentTimeMillis() - takeStartMs
+            val started = muxerStarted // captured before teardown flips the flag
+            var stopped = false
             if (started) {
-                storage.publish(videoUri!!)
+                try {
+                    muxer?.stop()
+                    stopped = true
+                } catch (e: Throwable) {
+                    Log.e(TAG, "muxer stop failed — discarding corrupt clip $clip", e)
+                    notifyError("muxer", e)
+                }
             } else {
-                storage.deletePending(videoUri!!)
+                Log.w(TAG, "muxer never started — discarding unfinished clip $clip")
             }
+            try { muxer?.release() } catch (e: Throwable) { Log.w(TAG, "muxer release", e) }
+            muxer = null
+            muxerStarted = false
+            videoTrack = -1
+            audioTrack = -1
+            pendingAudio.clear()
+            try { videoPfd?.close() } catch (e: Throwable) { Log.w(TAG, "pfd close", e) }
+            videoPfd = null
+            if (videoUri != null) {
+                if (started && stopped) {
+                    // R2-M5: publish ONLY a muxer that stopped cleanly — a failed stop previously
+                    // still published the broken 0-frame mp4 and reported success.
+                    storage.publish(videoUri!!)
+                } else {
+                    storage.deletePending(videoUri!!)
+                }
+            }
+            videoUri = null
+
+            try { audioEngine.stop() } catch (e: Throwable) { Log.w(TAG, "audio stop", e) }
+            try { gyroLogger.stop() } catch (e: Throwable) { Log.w(TAG, "gyro stop", e) }
+            slateManager.nextTake() // roll the take counter for the next clip
+
+            Log.i(TAG, "take finalized: $clip frames=$frames durationMs=$durationMs published=${started && stopped}")
+            // The HUD needs the REC state reset even on a discarded take; MainActivity shows the
+            // muxer error toast from notifyError above.
+            mainHandler.post { listener.onRecordingStopped(clip, durationMs, frames) }
+        } finally {
+            finalizing = false
         }
-        videoUri = null
-
-        try { audioEngine.stop() } catch (e: Throwable) { Log.w(TAG, "audio stop", e) }
-        try { gyroLogger.stop() } catch (e: Throwable) { Log.w(TAG, "gyro stop", e) }
-        slateManager.nextTake() // roll the take counter for the next clip
-
-        Log.i(TAG, "take finalized: $clip frames=$frames durationMs=$durationMs")
-        mainHandler.post { listener.onRecordingStopped(clip, durationMs, frames) }
     }
 
     private fun cleanupFailedStartLocked() {

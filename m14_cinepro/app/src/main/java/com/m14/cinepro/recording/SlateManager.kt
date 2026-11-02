@@ -24,7 +24,7 @@ import java.util.Locale
 class SlateManager(private val context: Context, private val settings: SettingsStore) {
 
     companion object {
-        private const val TAG = "M14Rec"
+        private const val TAG = "M14_CINEPRO"
     }
 
     /** Bumps the persistent take counter and returns the new value. */
@@ -88,18 +88,34 @@ class SlateManager(private val context: Context, private val settings: SettingsS
 
         val body = json.toString(2)
         val bytes = body.toByteArray(Charsets.UTF_8)
-        for (handle in listOfNotNull(storage.slateHandle(baseName), storage.slateHandleDcim(baseName))) {
+        // R2-L13: track per-handle success — close(commit=false) deletes the row instead of
+        // publishing a partial/empty slate, and the good-take flag is only consumed when the
+        // Movies copy (the MediaPool's source of truth) actually landed.
+        val moviesHandle = storage.slateHandle(baseName)
+        val dcimHandle = storage.slateHandleDcim(baseName)
+        var moviesOk = false
+        for ((isMovies, handle) in listOfNotNull(
+            moviesHandle?.let { true to it },
+            dcimHandle?.let { false to it }
+        )) {
+            var ok = false
             try {
                 handle.stream.write(bytes)
                 handle.stream.flush()
+                ok = true
+                if (isMovies) moviesOk = true
             } catch (e: Exception) {
                 Log.e(TAG, "slate write failed", e)
             } finally {
-                try { handle.close(true) } catch (e: Exception) { Log.w(TAG, "slate handle close failed", e) }
+                try { handle.close(ok) } catch (e: Exception) { Log.w(TAG, "slate handle close failed", e) }
             }
         }
-        settings.goodTake = false // consume the good-take flag once slated
-        Log.i(TAG, "slate written for $baseName (goodTake=$goodTake)")
+        if (moviesOk) {
+            settings.goodTake = false // consume the good-take flag once slated
+        } else {
+            Log.w(TAG, "slate write did not land in Movies — good-take flag preserved")
+        }
+        Log.i(TAG, "slate written for $baseName (goodTake=$goodTake moviesOk=$moviesOk)")
         return json
     }
 
@@ -113,6 +129,7 @@ class SlateManager(private val context: Context, private val settings: SettingsS
             pm.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
         }
     } catch (e: Exception) {
+        Log.w(TAG, "appVersion lookup failed", e)
         "unknown"
     }
 }

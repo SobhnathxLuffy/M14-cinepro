@@ -49,7 +49,7 @@ class MediaPoolDialog private constructor(
 ) {
 
     companion object {
-        private const val TAG = "M14Pool"
+        private const val TAG = "M14_CINEPRO"
 
         /** Playback panel update cadence (seek + timecode). */
         private const val UPDATE_MS = 250L
@@ -116,6 +116,9 @@ class MediaPoolDialog private constructor(
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            // R2-L19: the opaque full-screen dialog window no longer inherits the activity's
+            // FLAG_KEEP_SCREEN_ON — without it the screen could blank mid-playback.
+            addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             setDimAmount(0.55f)
             applyImmersive(this)
         }
@@ -308,6 +311,9 @@ class MediaPoolDialog private constructor(
     }
 
     private fun stopAndHidePlayer() {
+        // R2-L20: kill the 250 ms update tick first — it kept firing (and rewriting the hidden
+        // timecode) against a stopped player until dismiss.
+        uiHandler.removeCallbacks(updateTick)
         runCatching { videoView.stopPlayback() }
             .onFailure { Log.w(TAG, "stopPlayback failed", it) }
         playerPanel.visibility = View.GONE
@@ -330,9 +336,28 @@ class MediaPoolDialog private constructor(
     }
 
     private fun refresh() {
-        clips = storage.listClips()
-        (listView.adapter as BaseAdapter).notifyDataSetChanged()
+        // R2-M6: listClips() issues 1+2N MediaStore queries (gcsv+slate probe per clip) and was
+        // run synchronously on the UI thread on every open/toggle/delete — jank/ANR on large
+        // folders. Query on a worker thread; sequence-guard the post so a stale result can never
+        // overwrite a newer one.
+        refreshSeq++
+        val seq = refreshSeq
+        Thread {
+            val result = try {
+                storage.listClips()
+            } catch (t: Throwable) {
+                Log.w(TAG, "listClips failed", t)
+                emptyList<StorageHelper.ClipInfo>()
+            }
+            uiHandler.post {
+                if (seq != refreshSeq || !dialog.isShowing) return@post
+                clips = result
+                (listView.adapter as BaseAdapter).notifyDataSetChanged()
+            }
+        }.start()
     }
+
+    private var refreshSeq = 0
 
     private inner class ClipsAdapter : BaseAdapter() {
         override fun getCount(): Int = if (clips.isEmpty()) 1 else clips.size
@@ -543,8 +568,10 @@ class MediaPoolDialog private constructor(
             .setMessage(activity.getString(R.string.media_pool_delete_confirm))
             .setPositiveButton(activity.getString(R.string.media_pool_delete)) { d, _ ->
                 d.dismiss()
-                val ok = storage.deleteClip(info)
+                // R2-L14: stop playback BEFORE the row disappears — deleting first made the
+                // MediaPlayer hit a vanished fd and fire a spurious "PLAYBACK ERROR" toast.
                 if (currentClip?.name == info.name) stopAndHidePlayer()
+                val ok = storage.deleteClip(info)
                 goodTakeCache.remove(info.name)
                 refresh()
                 if (ok) {
