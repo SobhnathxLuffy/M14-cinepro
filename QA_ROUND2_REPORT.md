@@ -140,4 +140,8 @@ Severity: `H` HIGH, `M` MEDIUM, `L` LOW, `N` NIT. IDs are stable for cross-refer
 
 ## Part 4 — Remediation Log
 
-*(appended after fix groups land — see git history: fix groups 1-6, each compiled with `./gradlew assembleDebug` and pushed individually; APK artifact committed in the final group.)*
+All fixes landed in commit `fd5149e` ("QA Round 2 remediation — all HIGH/MEDIUM findings + LOW tail"), 46 files changed, +545/−858, after the V3 Round-2 report `bf895a6`. Every R2-H and R2-M finding plus the actionable R2-L/R2-N tail listed in Part 2 is remediated; the Part 3 deferrals are documented in code comments at their sites (search the `R2-` tags). Verification: `./gradlew assembleDebug` **BUILD SUCCESSFUL** (AGP 8.4.1 / Gradle 8.7 / Kotlin 1.9.24, 2 pre-existing benign warnings); APK markers verified in dex (`hs_fallback`, `HS FALLBACK`, `gyroflow v1.3`, `pcm queue overflow`, `M14_CINEPRO`) and manifest (`showWhenLocked=true`, `turnScreenOn=true`, `PROPERTY_COMPAT_OVERRIDE_LANDSCAPE_TO_PORTRAIT=false`).
+
+Built artifact: `releases/M14CinePro-v3.1-r2-debug.apk` (debug, minSdk 28 → targetSdk 34), committed with this report.
+
+**Push status:** the provided fine-grained PAT (`github_pat_...MumsLtM`) returns **401 Bad credentials** as of this round (API `/user` and git push both reject it; the repo is public so reads work anonymously). It was valid for the V3 push on 2026-10-24 and has since expired/been revoked. All commits are queued locally on `main` (`bf895a6` report → `fd5149e` fixes → APK artifact) and push the moment a fresh token is supplied.
