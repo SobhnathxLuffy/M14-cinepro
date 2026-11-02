@@ -144,4 +144,4 @@ All fixes landed in commit `fd5149e` ("QA Round 2 remediation — all HIGH/MEDIU
 
 Built artifact: `releases/M14CinePro-v3.1-r2-debug.apk` (debug, minSdk 28 → targetSdk 34), committed with this report.
 
-**Push status:** the provided fine-grained PAT (`github_pat_...MumsLtM`) returns **401 Bad credentials** as of this round (API `/user` and git push both reject it; the repo is public so reads work anonymously). It was valid for the V3 push on 2026-10-24 and has since expired/been revoked. All commits are queued locally on `main` (`bf895a6` report → `fd5149e` fixes → APK artifact) and push the moment a fresh token is supplied.
+**Push status:** the original fine-grained PAT (`github_pat_...MumsLtM`) expired/revoked after the V3 push (401 on API and git push), so the round's commits were queued locally. A fresh fine-grained PAT was supplied on **2026-11-03** and all three commits landed on `origin/main` in a single push: `46e1cab..2ef61a1  main -> main` (`bf895a6` report → `fd5149e` fixes → `2ef61a1` APK artifact). `origin/main` and local `main` are in sync; working tree clean. (Token values are never committed to the repository.)
